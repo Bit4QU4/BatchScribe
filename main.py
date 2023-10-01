@@ -187,6 +187,11 @@ class WhisperTranscriberApp:
         self.executor = ThreadPoolExecutor(max_workers=self.max_workers.get())
 
     def worker_thread(self):
+        self.controls_to_lock = [self.select_button, self.transcribe_button, self.clear_button, self.worker_slider]
+        
+        for widget in self.controls_to_lock:
+            widget.config(state=tk.DISABLED)
+
         while not self.job_queue.empty():
             future = self.executor.submit(self.transcribe_file, self.job_queue.get())
             future.add_done_callback(lambda x: self.root.after(0, self.update_progress))
@@ -195,6 +200,8 @@ class WhisperTranscriberApp:
         self.end_time = time.time()  # Record the end time
         elapsed_time = self.end_time - self.start_time  # Calculate elapsed time
         
+        # Re-enable the controls after all the work is done.
+        self.root.after(0, self.re_enable_controls)
         # Convert elapsed time to hours, minutes, and seconds
         hours, remainder = divmod(elapsed_time, 3600)
         minutes, seconds = divmod(remainder, 60)
@@ -208,7 +215,9 @@ class WhisperTranscriberApp:
             formatted_time = f"{seconds:.2f} seconds"
         
         messagebox.showinfo("Done", f"Done transcribing. It took {formatted_time}.")
-
+    def re_enable_controls(self):
+        for widget in self.controls_to_lock:
+            widget.config(state=tk.NORMAL)
     def transcribe_file(self, file_path):
         print(f"Transcribing file: {file_path}")
         try:
