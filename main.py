@@ -1,4 +1,5 @@
 import time, os, ast, whisper, threading, queue, json, subprocess, sys
+import concurrent.futures
 import torch
 import tkinter as tk
 import ttkbootstrap as ttk
@@ -57,7 +58,8 @@ class WhisperTranscriberApp:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title('Whisper Transcriber')
-        
+        #self.root.geometry("400x430")
+        self.root.resizable(False,False)
         # Create a ttkbootstrap style object
         style = Style(theme='darkly')
         style.configure('TButton', padding=5)
@@ -79,8 +81,6 @@ class WhisperTranscriberApp:
         self.stop_button.grid(row=0, column=2, padx=2, pady=2)
         self.clear_button = Button(button_frame, text='Clear List', command=self.clear_list)
         self.clear_button.grid(row=0, column=3, padx=1, pady=1)
-        
-
         self.root.columnconfigure(0, weight=1)
         button_frame.columnconfigure(0, weight=1)
         button_frame.columnconfigure(1, weight=1)
@@ -90,8 +90,8 @@ class WhisperTranscriberApp:
         self.worker_label = Label(self.root, text="Max Workers:")
         self.worker_label.grid(row=2, column=0, sticky="w", padx=10, pady=5)
 
-        ToolTip(self.worker_label, "Number of threads to run, > count requires better card")
-
+        ToolTip(self.worker_label, "Number of threads to run, > count requires better graphics card")
+        
         self.max_workers = tk.IntVar(value=5)
         # Label to display the current value of the slider
         self.worker_value_label = ttk.Label(self.root, text=self.max_workers.get())
@@ -102,13 +102,18 @@ class WhisperTranscriberApp:
 
         self.progress = Progressbar(self.root, orient=tk.HORIZONTAL, length=200, mode='determinate')
         self.progress.grid(row=4, column=0, sticky="we", padx=10, pady=10)
+        ToolTip(self.progress, "Shows the current progress of conversion, in terms of # FILEs completed")
+
+        # Create startup pop-up
+        messagebox.showinfo("Startup", f"Hi, {os.environ.get('USERNAME') or os.environ.get('USER')}.\n To use this software start by selecting the files you want to use, then hit 'Start Transcription'. Please note that the progress bar is per file completion.")
 
         # Setup device that will be used for calc
-        self.device = "cuda"
         if not self.check_nvidia_gpu():
             messagebox.showwarning("GPU Not Detected", "A compatible NVIDIA GPU was not detected. CUDA operations might not be supported. Using CPU fall-back. (CPU will likely be slower than GPU!)")
             # Use CPU as fallback if GPU is not available.
-            self.device = "cpu"  
+            self.device = "cpu"
+        else:
+            self.device = "cuda"
         self.results_queue = queue.Queue()
         self.job_queue = queue.Queue()
         self.executor = ThreadPoolExecutor(max_workers=self.max_workers.get())
@@ -122,12 +127,12 @@ class WhisperTranscriberApp:
         if not self.check_ffmpeg_installed():
             messagebox.showwarning("Missing Dependency", "ffmpeg is not installed on this system. Please install it to use this application.")
             sys.exit(1)
-
         row_num = 5  # Start from the next row after progress bar
         for format, var in self.output_formats.items():
             cb = tk.Checkbutton(self.root, text=f"Output {format.upper()}", variable=var)
             cb.grid(row=row_num, column=0, sticky="w", padx=10, pady=5)
             row_num += 1
+
     def update_worker_value_label(self, *args):
         # Existing code to update the label
         self.worker_value_label.config(text=self.max_workers.get())
@@ -138,18 +143,35 @@ class WhisperTranscriberApp:
         self.executor = ThreadPoolExecutor(max_workers=self.max_workers.get())
 
     def check_nvidia_gpu(self):
-        # Check if the system has compatable GPU
+        # Check if CUDA is available
         if not torch.cuda.is_available():
             return False
+
+        # Get the name and compute capability of the first GPU device
         device_name = torch.cuda.get_device_name(0)
-        if "NVIDIA" in device_name:
+        compute_capability = torch.cuda.get_device_capability(0)
+
+        # Check if the device is an NVIDIA GPU and meets the minimum CUDA capability
+        min_compute_capability = (4, 0)
+        if "NVIDIA" in device_name and compute_capability >= min_compute_capability:
             return True
+        # If the device is not an NVIDIA GPU or doesn't meet the requirements
         return False
+        
+    def get_ffmpeg_path(self):
+        if getattr(sys, 'frozen', False):
+            # If the application is bundled with PyInstaller
+            base_path = sys._MEIPASS
+        else:
+            # If running in a normal Python environment
+            base_path = os.path.dirname(os.path.abspath(__file__))
+            print(str(base_path))
+        return os.path.join(base_path, 'ffmpeg.exe')
 
     def check_ffmpeg_installed(self):
         # Check if ffmpeg is available as it's required for whisper
         try:
-            result = subprocess.run(["ffmpeg", "-version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+            result = subprocess.run([self.get_ffmpeg_path(), "-version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
             if result.returncode == 0:
                 return True
             else:
@@ -162,24 +184,37 @@ class WhisperTranscriberApp:
 
     def select_files(self):
         self.clear_list()
-        self.file_paths = filedialog.askopenfilenames(filetypes=(("All files", "*.*"), ("MP4 Files", "*.mp4"), ("MP3 Files", "*.mp3")))
-
+        self.file_paths = filedialog.askopenfilenames(
+        filetypes=(
+            ("Video Files", "*.mp4;*.avi;*.mov;*.flv;*.wmv"),  # Add or remove video formats as needed
+            ("Audio Files", "*.mp3;*.wav;*.aac;*.flac;*.ogg"),  # Add or remove audio formats as needed
+            ("All Files", "*.*")
+        )
+    )
         if len(self.file_paths) > 10:  # If there are more than 10 files, only display the first and last 5
-            display_paths = self.file_paths[:5] + ("...",) + self.file_paths[-5:]
+            display_paths = [os.path.basename(path) for path in self.file_paths[:5]] + ["..."] + [os.path.basename(path) for path in self.file_paths[-5:]]
+        elif len(self.file_paths) == 0:
+            display_paths = "No files selected!"
         else:  # If there are 10 or fewer files, display them all
-            display_paths = self.file_paths
+            display_paths = [os.path.basename(path) for path in self.file_paths]
+
+        # Format display paths for insertion into label
+        if isinstance(display_paths, list):
+            display_paths = '\n '.join(display_paths)
 
         self.file_label.insert(tk.INSERT, f'Selected file paths: {display_paths}\n')
 
     def transcribe_files(self):
-        # Start workers
-        self.start_time = time.time()
-        for file_path in self.file_paths:
-            self.job_queue.put(file_path)
-
-        self.progress['maximum'] = len(self.file_paths)
-        threading.Thread(target=self.worker_thread).start()
-        self.root.after(1000, self.check_results_queue)  # Check the results queue every second
+        if not any(var.get() for var in self.output_formats.values()):
+            messagebox.showerror("No Format", message="No format selected, select an output format to continue.")
+        else:
+            self.start_time = time.time()
+            for file_path in self.file_paths:
+                self.job_queue.put(file_path)
+            self.progress['maximum'] = len(self.file_paths)
+            threading.Thread(target=self.worker_thread).start()
+            # Check the results queue every second
+            self.root.after(1000, self.check_results_queue)
 
     def stop_transcription(self):
         # Ties back to the stop button
@@ -188,19 +223,23 @@ class WhisperTranscriberApp:
 
     def worker_thread(self):
         self.controls_to_lock = [self.select_button, self.transcribe_button, self.clear_button, self.worker_slider]
-        
+        # Start control lockout to prevent user tamper during transcript 
         for widget in self.controls_to_lock:
             widget.config(state=tk.DISABLED)
 
-        while not self.job_queue.empty():
-            future = self.executor.submit(self.transcribe_file, self.job_queue.get())
-            future.add_done_callback(lambda x: self.root.after(0, self.update_progress))
+        # Initialize the executor here
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.worker_slider.get()) as executor:
+            while not self.job_queue.empty():
+                future = executor.submit(self.transcribe_file, self.job_queue.get())
+                future.add_done_callback(lambda x: self.root.after(0, self.update_progress))
 
-        self.executor.shutdown(wait=True)  # Wait for all threads to finish
+            # The executor will automatically shut down here
+            # wait=True is implicit with the context manager
+
         self.end_time = time.time()  # Record the end time
         elapsed_time = self.end_time - self.start_time  # Calculate elapsed time
-        
-        # Re-enable the controls after all the work is done.
+
+        # Re-enable the controls after all the work is done
         self.root.after(0, self.re_enable_controls)
         # Convert elapsed time to hours, minutes, and seconds
         hours, remainder = divmod(elapsed_time, 3600)
@@ -213,16 +252,26 @@ class WhisperTranscriberApp:
             formatted_time = f"{int(minutes)} minutes and {seconds:.2f} seconds"
         else:
             formatted_time = f"{seconds:.2f} seconds"
-        
         messagebox.showinfo("Done", f"Done transcribing. It took {formatted_time}.")
+
     def re_enable_controls(self):
         for widget in self.controls_to_lock:
             widget.config(state=tk.NORMAL)
+
     def transcribe_file(self, file_path):
         print(f"Transcribing file: {file_path}")
         try:
-            # Load the model in the thread
-            model = whisper.load_model("small").to(self.device)
+                # Load the model in the thread
+                # Determine the path to the model file
+            if getattr(sys, 'frozen', False):
+                # If running in a PyInstaller bundle
+                base_path = sys._MEIPASS
+            else:
+                # Normal Python environment
+                base_path = os.path.dirname(os.path.abspath(__file__))
+
+            model_path = os.path.join(base_path, 'models')
+            model = whisper.load_model(name="small", download_root=model_path).to(self.device)
             transcription_response = model.transcribe(file_path, language='en', verbose=True)
             for format, var in self.output_formats.items():
                 if var.get():
