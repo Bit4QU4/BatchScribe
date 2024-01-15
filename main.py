@@ -6,6 +6,7 @@ import ttkbootstrap as ttk
 from tkinter import filedialog, messagebox
 from tkinter.ttk import Progressbar, Button, Label, Scale, Checkbutton
 from ttkbootstrap import Style
+# Sets the number of threads to use, by default torch tries to multithread; this bypasses it
 torch.set_num_threads(1)
 from tkinter.scrolledtext import ScrolledText
 from concurrent.futures import ThreadPoolExecutor
@@ -57,11 +58,9 @@ class ToolTip:
 class WhisperTranscriberApp:
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title('Whisper Transcriber')
-        #self.root.geometry("400x430")
+        self.root.title('AV Voice2Text')
         self.root.resizable(False,False)
-        # Create a ttkbootstrap style object
-        style = Style(theme='darkly')
+        style = Style(theme='yeti')
         style.configure('TButton', padding=5)
         
         self.file_paths = tk.StringVar()
@@ -178,6 +177,7 @@ class WhisperTranscriberApp:
                 return False
         except FileNotFoundError:
             return False
+
     def clear_list(self):
         self.file_label.delete(1.0, tk.END)  # clear all text from the ScrolledText widget
         self.file_paths = ()  # also clear the stored file paths
@@ -261,8 +261,11 @@ class WhisperTranscriberApp:
     def transcribe_file(self, file_path):
         print(f"Transcribing file: {file_path}")
         try:
-                # Load the model in the thread
-                # Determine the path to the model file
+            # Check if file exists
+            if not os.path.exists(file_path):
+                raise FileNotFoundError(f"File not found: {file_path}")
+
+            # Load the model in the thread
             if getattr(sys, 'frozen', False):
                 # If running in a PyInstaller bundle
                 base_path = sys._MEIPASS
@@ -271,23 +274,39 @@ class WhisperTranscriberApp:
                 base_path = os.path.dirname(os.path.abspath(__file__))
 
             model_path = os.path.join(base_path, 'models')
-            model = whisper.load_model(name="small", download_root=model_path).to(self.device)
+            try:
+                model = whisper.load_model(name="small", download_root=model_path).to(self.device)
+            except Exception as model_error:
+                raise RuntimeError(f"Failed to load model: {model_error}")
+
             transcription_response = model.transcribe(file_path, language='en', verbose=True)
+
             for format, var in self.output_formats.items():
                 if var.get():
                     output_filename = os.path.splitext(file_path)[0] + "." + format
+                    output_directory = os.path.dirname(output_filename)
+                    if not os.path.exists(output_directory):
+                        os.makedirs(output_directory)
+
                     if format == "txt":
-                        with open(output_filename, 'w') as f:
-                            # Extracting the 'text' field along with 'start' and 'end' timestamps
-                            text_content = transcription_response.get('text', 'No transcription available')
-                            start_time = transcription_response.get('start', 'N/A')
-                            end_time = transcription_response.get('end', 'N/A')
-                            formatted_content = f"**Start Time:** {start_time}\n{text_content}"
-                            f.write(formatted_content)
+                        try:
+                            with open(output_filename, 'w') as f:
+                                text_content = transcription_response.get('text', 'No transcription available')
+                                start_time = transcription_response.get('start', 'N/A')
+                                end_time = transcription_response.get('end', 'N/A')
+                                formatted_content = f"**Start Time:** {start_time}\n{text_content}"
+                                f.write(formatted_content)
+                        except IOError as io_error:
+                            raise IOError(f"Failed to write to file {output_filename}: {io_error}")
                     else:
-                        output_writer = whisper.utils.get_writer(format, os.path.dirname(file_path))
-                        output_writer(transcription_response, output_filename)
+                        try:
+                            output_writer = whisper.utils.get_writer(format, output_directory)
+                            output_writer(transcription_response, output_filename)
+                        except Exception as output_error:
+                            raise Exception(f"Error in writing output for format {format}: {output_error}")
+
             self.results_queue.put(("success", f"Successfully transcribed file: {file_path}"))
+
         except Exception as e:
             self.results_queue.put(("error", f"An error occurred while transcribing: {str(e)}"))
 
