@@ -13,8 +13,8 @@ def convert_vtt_to_md(vtt_filename, md_filename):
         for caption in vtt:
             start_time = convert_time(caption.start_in_seconds)
             end_time = convert_time(caption.end_in_seconds)
-            f.write(f"**{start_time} - {end_time}**\n\n")
-            f.write(caption.text + "\n\n")
+            f.write(f"**{start_time} - {end_time}**:")
+            f.write(caption.text + "\n")
 
 def convert_all(directory):
     for filename in os.listdir(directory):

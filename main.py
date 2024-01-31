@@ -162,9 +162,12 @@ class WhisperTranscriberApp:
         if getattr(sys, 'frozen', False):
             # If the application is bundled with PyInstaller
             base_path = sys._MEIPASS
+            print("Frozen! Checking FFMpeg location")
+            print(str(base_path))
         else:
             # If running in a normal Python environment
             base_path = os.path.dirname(os.path.abspath(__file__))
+            print("Detected DEV Env for FFMpeg")
             print(str(base_path))
         return os.path.join(base_path, 'ffmpeg.exe')
 
