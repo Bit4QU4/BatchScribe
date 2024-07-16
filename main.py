@@ -1,15 +1,16 @@
-import time, os, ast, whisper, threading, queue, json, subprocess, sys
-import concurrent.futures
-import torch
+DEBUG = True
+
+import cProfile  # Add this import statement
+import time, os, ast, threading, queue, json, sys
 import tkinter as tk
 import ttkbootstrap as ttk
 from tkinter import filedialog, messagebox
 from tkinter.ttk import Progressbar, Button, Label, Scale, Checkbutton
 from ttkbootstrap import Style
 # Sets the number of threads to use, by default torch tries to multithread; this bypasses it
-torch.set_num_threads(1)
 from tkinter.scrolledtext import ScrolledText
-from concurrent.futures import ThreadPoolExecutor
+import concurrent.futures  # Add this import statement
+from concurrent.futures import ThreadPoolExecutor  # Add this import statement
 
 class ToolTip:
     """
@@ -62,24 +63,34 @@ class WhisperTranscriberApp:
         self.root.resizable(False,False)
         style = Style(theme='yeti')
         style.configure('TButton', padding=5)
-        
+        # Initialize a StringVar to hold the file paths
         self.file_paths = tk.StringVar()
+        
+        # Create a ScrolledText widget to display the selected file paths
         self.file_label = ScrolledText(self.root, height=10, wrap=tk.WORD)
         self.file_label.grid(row=0, column=0, padx=10, pady=10, sticky="we")
 
+        # Create a frame to hold the buttons
         button_frame = tk.Frame(self.root)
         button_frame.grid(row=1, column=0, padx=10, pady=10, sticky="nsew")
 
+        # Create and place the 'Select Files' button
         self.select_button = Button(button_frame, text='Select Files', command=self.select_files)
         self.select_button.grid(row=0, column=0, padx=1, pady=1)
 
+        # Create and place the 'Transcribe Files' button
         self.transcribe_button = Button(button_frame, text='Transcribe Files', command=self.transcribe_files)
         self.transcribe_button.grid(row=0, column=1, padx=1, pady=1)
 
+        # Create and place the 'Stop' button
         self.stop_button = Button(button_frame, text='Stop', command=self.stop_transcription)
         self.stop_button.grid(row=0, column=2, padx=2, pady=2)
+
+        # Create and place the 'Clear List' button
         self.clear_button = Button(button_frame, text='Clear List', command=self.clear_list)
         self.clear_button.grid(row=0, column=3, padx=1, pady=1)
+
+        # Configure column weights to ensure proper resizing
         self.root.columnconfigure(0, weight=1)
         button_frame.columnconfigure(0, weight=1)
         button_frame.columnconfigure(1, weight=1)
@@ -142,7 +153,7 @@ class WhisperTranscriberApp:
         self.executor = ThreadPoolExecutor(max_workers=self.max_workers.get())
 
     def check_nvidia_gpu(self):
-        # Check if CUDA is available
+        load_heavy_modules()
         if not torch.cuda.is_available():
             return False
 
@@ -156,6 +167,24 @@ class WhisperTranscriberApp:
             return True
         # If the device is not an NVIDIA GPU or doesn't meet the requirements
         return False
+    
+    def install_cuda_drivers(self):
+        if not self.check_nvidia_gpu():
+            messagebox.showwarning("GPU Not Detected", "A compatible NVIDIA GPU was not detected. CUDA operations might not be supported. Using CPU fall-back. (CPU will likely be slower than GPU!)")
+            return False
+
+        try:
+            # Attempt to install CUDA drivers
+            result = subprocess.run(["sudo", "apt-get", "install", "nvidia-cuda-toolkit"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+            if result.returncode == 0:
+                messagebox.showinfo("CUDA Installation", "CUDA drivers installed successfully.")
+                return True
+            else:
+                messagebox.showerror("CUDA Installation Failed", f"Failed to install CUDA drivers. Error: {result.stderr}")
+                return False
+        except Exception as e:
+            messagebox.showerror("CUDA Installation Error", f"An error occurred while trying to install CUDA drivers: {str(e)}")
+            return False
         
     def get_ffmpeg_path(self):
         if getattr(sys, 'frozen', False):
@@ -211,6 +240,9 @@ class WhisperTranscriberApp:
         if not any(var.get() for var in self.output_formats.values()):
             messagebox.showerror("No Format", message="No format selected, select an output format to continue.")
         else:
+            if DEBUG ==True:
+                pr = cProfile.Profile()
+                pr.enable()
             self.start_time = time.time()
             for file_path in self.file_paths:
                 self.job_queue.put(file_path)
@@ -218,6 +250,9 @@ class WhisperTranscriberApp:
             threading.Thread(target=self.worker_thread).start()
             # Check the results queue every second
             self.root.after(1000, self.check_results_queue)
+            if DEBUG == True:
+                pr.disable()
+                pr.dump_stats(f'transcribe_file_{os.path.basename(file_path)}.prof')
 
     def stop_transcription(self):
         # Ties back to the stop button
@@ -225,13 +260,16 @@ class WhisperTranscriberApp:
         self.executor = ThreadPoolExecutor(max_workers=self.max_workers.get())
 
     def worker_thread(self):
+        if DEBUG ==True:
+            pr = cProfile.Profile()
+            pr.enable()
         self.controls_to_lock = [self.select_button, self.transcribe_button, self.clear_button, self.worker_slider]
         # Start control lockout to prevent user tamper during transcript 
         for widget in self.controls_to_lock:
             widget.config(state=tk.DISABLED)
 
         # Initialize the executor here
-        with concurrent.futures.ThreadPoolExecutor(max_workers=self.worker_slider.get()) as executor:
+        with ThreadPoolExecutor(max_workers=self.max_workers.get()) as executor:
             while not self.job_queue.empty():
                 future = executor.submit(self.transcribe_file, self.job_queue.get())
                 future.add_done_callback(lambda x: self.root.after(0, self.update_progress))
@@ -255,6 +293,10 @@ class WhisperTranscriberApp:
             formatted_time = f"{int(minutes)} minutes and {seconds:.2f} seconds"
         else:
             formatted_time = f"{seconds:.2f} seconds"
+
+        if DEBUG == True:
+            pr.disable()
+            pr.dump_stats('worker_thread_profile.prof')
         messagebox.showinfo("Done", f"Done transcribing. It took {formatted_time}.")
 
     def re_enable_controls(self):
@@ -262,6 +304,7 @@ class WhisperTranscriberApp:
             widget.config(state=tk.NORMAL)
 
     def transcribe_file(self, file_path):
+        load_heavy_modules()
         print(f"Transcribing file: {file_path}")
         try:
             # Check if file exists
@@ -325,6 +368,12 @@ class WhisperTranscriberApp:
 
     def run(self):
         self.root.mainloop()
+
+def load_heavy_modules():
+    global whisper, torch, subprocess
+    import whisper
+    import torch
+    import subprocess
 
 if __name__ == '__main__':
     app = WhisperTranscriberApp()

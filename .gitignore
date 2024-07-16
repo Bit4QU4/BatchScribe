@@ -24,3 +24,4 @@ build/main/localpycs/pyimod04_pywin32.pyc
 build/main/localpycs/struct.pyc
 dist/Whisper Transcriber.exe
 models/small.pt
+TranscriptionLibs/*
