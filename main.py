@@ -1,380 +1,476 @@
-DEBUG = True
+"""GUI entry point for TranscriptionHackery."""
 
-import cProfile  # Add this import statement
-import time, os, ast, threading, queue, json, sys
+from __future__ import annotations
+
+import logging
+import shutil
+import sys
 import tkinter as tk
+from pathlib import Path
+from tkinter import filedialog
+
 import ttkbootstrap as ttk
-from tkinter import filedialog, messagebox
-from tkinter.ttk import Progressbar, Button, Label, Scale, Checkbutton
-from ttkbootstrap import Style
-# Sets the number of threads to use, by default torch tries to multithread; this bypasses it
-from tkinter.scrolledtext import ScrolledText
-import concurrent.futures  # Add this import statement
-from concurrent.futures import ThreadPoolExecutor  # Add this import statement
+from ttkbootstrap.constants import DISABLED, END, HORIZONTAL, LEFT, NORMAL, RIGHT, VERTICAL
+from ttkbootstrap.widgets import ToolTip
 
-class ToolTip:
-    """
-    ToolTip class for tkinter widgets.
+from config import AppConfig, load_config, save_config, setup_logging
+from engine import MODEL_SIZES, TranscriptionBackend, create_backend
+from worker import (
+    FileResult,
+    TranscriptionJob,
+    TranscriptionWorker,
+    WorkerCallbacks,
+)
+from writers import FORMAT_WRITERS
 
-    This class provides a simple way to show a tooltip when hovering over a tkinter widget.
-    
-    Usage:
-        widget = tk.Label(root, text="Example")
-        tooltip = ToolTip(widget, "This is a tooltip example")
+logger = logging.getLogger("transcriber")
 
-    Parameters:
-    - widget: The tkinter widget to which the tooltip is attached.
-    - text: The text displayed inside the tooltip.
-    """
-    def __init__(self, widget, text):
-        # Initialize the ToolTip with the associated widget and text to display.
-        self.widget = widget
-        self.text = text
-        self.tooltip = None
-        
-        # Bind mouse entering and leaving events to the widget.
-        self.widget.bind("<Enter>", self.show_tooltip)
-        self.widget.bind("<Leave>", self.hide_tooltip)
+LANGUAGE_CHOICES: list[str] = ["en", "auto", "es", "fr", "de", "zh", "ja", "pt", "ru"]
 
-    def show_tooltip(self, event=None):
-        # Calculate the position for displaying the tooltip based on the widget's position.
-        x, y, _, _ = self.widget.bbox("insert")  # Get widget bounding box coordinates.
-        x += self.widget.winfo_rootx() + 25
-        y += self.widget.winfo_rooty() + 25
 
-        # Create a top-level window for the tooltip.
-        self.tooltip = tk.Toplevel(self.widget)
-        self.tooltip.wm_overrideredirect(True)  # Remove window decorations (like title bar).
-        self.tooltip.wm_geometry(f"+{x}+{y}")  # Set window position.
+# ---------------------------------------------------------------------------
+# Pure helpers (no GUI) — tested in tests/test_app_logic.py
+# ---------------------------------------------------------------------------
 
-        # Add a label to the tooltip window and display the text.
-        label = tk.Label(self.tooltip, text=self.text, background="white", relief="solid", borderwidth=1, font=("Arial", "10", "normal"))
-        label.pack(ipadx=1)
+def format_elapsed(seconds: float) -> str:
+    """Return human-readable elapsed string: Xm Ys or Xs."""
+    total = max(0, int(seconds))
+    m, s = divmod(total, 60)
+    if m:
+        return f"{m}m {s}s"
+    return f"{s}s"
 
-    def hide_tooltip(self, event=None):
-        # Destroy the tooltip window if it exists.
-        if self.tooltip:
-            self.tooltip.destroy()
 
-class WhisperTranscriberApp:
-    def __init__(self):
-        self.root = tk.Tk()
-        self.root.title('AV Voice2Text')
-        self.root.resizable(False,False)
-        style = Style(theme='yeti')
-        style.configure('TButton', padding=5)
-        # Initialize a StringVar to hold the file paths
-        self.file_paths = tk.StringVar()
-        
-        # Create a ScrolledText widget to display the selected file paths
-        self.file_label = ScrolledText(self.root, height=10, wrap=tk.WORD)
-        self.file_label.grid(row=0, column=0, padx=10, pady=10, sticky="we")
+def language_to_param(choice: str) -> str | None:
+    """Convert UI language string to engine language parameter (None = auto-detect)."""
+    return None if choice == "auto" else choice
 
-        # Create a frame to hold the buttons
-        button_frame = tk.Frame(self.root)
-        button_frame.grid(row=1, column=0, padx=10, pady=10, sticky="nsew")
 
-        # Create and place the 'Select Files' button
-        self.select_button = Button(button_frame, text='Select Files', command=self.select_files)
-        self.select_button.grid(row=0, column=0, padx=1, pady=1)
+def find_ffmpeg() -> str | None:
+    """Return path to ffmpeg if found bundled or on PATH, else None."""
+    if getattr(sys, "frozen", False):
+        bundled = Path(sys._MEIPASS) / "ffmpeg.exe"  # type: ignore[attr-defined]
+        if bundled.exists():
+            return str(bundled)
+    local = Path(__file__).parent / "ffmpeg.exe"
+    if local.exists():
+        return str(local)
+    return shutil.which("ffmpeg")
 
-        # Create and place the 'Transcribe Files' button
-        self.transcribe_button = Button(button_frame, text='Transcribe Files', command=self.transcribe_files)
-        self.transcribe_button.grid(row=0, column=1, padx=1, pady=1)
 
-        # Create and place the 'Stop' button
-        self.stop_button = Button(button_frame, text='Stop', command=self.stop_transcription)
-        self.stop_button.grid(row=0, column=2, padx=2, pady=2)
+def build_jobs(
+    paths: list[str],
+    formats: list[str],
+    output_dir: str | None,
+    language: str | None,
+) -> list[TranscriptionJob]:
+    return [
+        TranscriptionJob(path=p, formats=formats, output_dir=output_dir or None, language=language)
+        for p in paths
+    ]
 
-        # Create and place the 'Clear List' button
-        self.clear_button = Button(button_frame, text='Clear List', command=self.clear_list)
-        self.clear_button.grid(row=0, column=3, padx=1, pady=1)
 
-        # Configure column weights to ensure proper resizing
-        self.root.columnconfigure(0, weight=1)
-        button_frame.columnconfigure(0, weight=1)
-        button_frame.columnconfigure(1, weight=1)
-        button_frame.columnconfigure(2, weight=1)
-        button_frame.columnconfigure(3, weight=1)
+# ---------------------------------------------------------------------------
+# Main application class
+# ---------------------------------------------------------------------------
 
-        self.worker_label = Label(self.root, text="Max Workers:")
-        self.worker_label.grid(row=2, column=0, sticky="w", padx=10, pady=5)
-
-        ToolTip(self.worker_label, "Number of threads to run, > count requires better graphics card")
-        
-        self.max_workers = tk.IntVar(value=5)
-        # Label to display the current value of the slider
-        self.worker_value_label = ttk.Label(self.root, text=self.max_workers.get())
-        self.worker_value_label.grid(row=3, column=1, sticky="w")
-        self.worker_slider = Scale(self.root, from_=2, to=10, orient=tk.HORIZONTAL, variable=self.max_workers, length=200)
-        self.worker_slider.grid(row=3, column=0, sticky="we", padx=10, pady=5)
-        self.max_workers.trace("w", self.update_worker_value_label)
-
-        self.progress = Progressbar(self.root, orient=tk.HORIZONTAL, length=200, mode='determinate')
-        self.progress.grid(row=4, column=0, sticky="we", padx=10, pady=10)
-        ToolTip(self.progress, "Shows the current progress of conversion, in terms of # FILEs completed")
-
-        # Create startup pop-up
-        messagebox.showinfo("Startup", f"Hi, {os.environ.get('USERNAME') or os.environ.get('USER')}.\n To use this software start by selecting the files you want to use, then hit 'Start Transcription'. Please note that the progress bar is per file completion.")
-
-        # Setup device that will be used for calc
-        if not self.check_nvidia_gpu():
-            messagebox.showwarning("GPU Not Detected", "A compatible NVIDIA GPU was not detected. CUDA operations might not be supported. Using CPU fall-back. (CPU will likely be slower than GPU!)")
-            # Use CPU as fallback if GPU is not available.
-            self.device = "cpu"
-        else:
-            self.device = "cuda"
-        self.results_queue = queue.Queue()
-        self.job_queue = queue.Queue()
-        self.executor = ThreadPoolExecutor(max_workers=self.max_workers.get())
-
-        self.output_formats = {
-            "vtt": tk.BooleanVar(),
-            "srt": tk.BooleanVar(),
-            "txt": tk.BooleanVar()
-        }
-
-        if not self.check_ffmpeg_installed():
-            messagebox.showwarning("Missing Dependency", "ffmpeg is not installed on this system. Please install it to use this application.")
-            sys.exit(1)
-        row_num = 5  # Start from the next row after progress bar
-        for format, var in self.output_formats.items():
-            cb = tk.Checkbutton(self.root, text=f"Output {format.upper()}", variable=var)
-            cb.grid(row=row_num, column=0, sticky="w", padx=10, pady=5)
-            row_num += 1
-
-    def update_worker_value_label(self, *args):
-        # Existing code to update the label
-        self.worker_value_label.config(text=self.max_workers.get())
-        
-        # Re-initialize the executor with the updated max_workers value
-        if hasattr(self, 'executor'):
-            self.executor.shutdown(wait=False)
-        self.executor = ThreadPoolExecutor(max_workers=self.max_workers.get())
-
-    def check_nvidia_gpu(self):
-        load_heavy_modules()
-        if not torch.cuda.is_available():
-            return False
-
-        # Get the name and compute capability of the first GPU device
-        device_name = torch.cuda.get_device_name(0)
-        compute_capability = torch.cuda.get_device_capability(0)
-
-        # Check if the device is an NVIDIA GPU and meets the minimum CUDA capability
-        min_compute_capability = (4, 0)
-        if "NVIDIA" in device_name and compute_capability >= min_compute_capability:
-            return True
-        # If the device is not an NVIDIA GPU or doesn't meet the requirements
-        return False
-    
-    def install_cuda_drivers(self):
-        if not self.check_nvidia_gpu():
-            messagebox.showwarning("GPU Not Detected", "A compatible NVIDIA GPU was not detected. CUDA operations might not be supported. Using CPU fall-back. (CPU will likely be slower than GPU!)")
-            return False
+class TranscriberApp:
+    def __init__(self) -> None:
+        self._cfg: AppConfig = load_config()
+        log_path = setup_logging()
+        self._log_path: Path = log_path
 
         try:
-            # Attempt to install CUDA drivers
-            result = subprocess.run(["sudo", "apt-get", "install", "nvidia-cuda-toolkit"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
-            if result.returncode == 0:
-                messagebox.showinfo("CUDA Installation", "CUDA drivers installed successfully.")
-                return True
-            else:
-                messagebox.showerror("CUDA Installation Failed", f"Failed to install CUDA drivers. Error: {result.stderr}")
-                return False
-        except Exception as e:
-            messagebox.showerror("CUDA Installation Error", f"An error occurred while trying to install CUDA drivers: {str(e)}")
-            return False
-        
-    def get_ffmpeg_path(self):
-        if getattr(sys, 'frozen', False):
-            # If the application is bundled with PyInstaller
-            base_path = sys._MEIPASS
-            print("Frozen! Checking FFMpeg location")
-            print(str(base_path))
-        else:
-            # If running in a normal Python environment
-            base_path = os.path.dirname(os.path.abspath(__file__))
-            print("Detected DEV Env for FFMpeg")
-            print(str(base_path))
-        return os.path.join(base_path, 'ffmpeg.exe')
+            self._app = ttk.Window(themename=self._cfg.theme)
+        except Exception:
+            # A hand-edited or stale config theme must not brick startup.
+            logger.warning("Unknown theme %r; falling back to darkly", self._cfg.theme)
+            self._cfg.theme = "darkly"
+            self._app = ttk.Window(themename="darkly")
+        self._app.title("AV Voice2Text")
+        self._app.minsize(700, 480)
+        self._app.resizable(True, True)
 
-    def check_ffmpeg_installed(self):
-        # Check if ffmpeg is available as it's required for whisper
-        try:
-            result = subprocess.run([self.get_ffmpeg_path(), "-version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
-            if result.returncode == 0:
-                return True
-            else:
-                return False
-        except FileNotFoundError:
-            return False
+        # Tracks full paths; iid == path
+        self._file_paths: list[str] = []
 
-    def clear_list(self):
-        self.file_label.delete(1.0, tk.END)  # clear all text from the ScrolledText widget
-        self.file_paths = ()  # also clear the stored file paths
+        # Current backend params so we can detect when recreation is needed
+        self._backend_model: str = self._cfg.model_size
+        self._backend_lang: str = self._cfg.language
+        self._backend: TranscriptionBackend | None = None
+        self._worker: TranscriptionWorker | None = None
 
-    def select_files(self):
-        self.clear_list()
-        self.file_paths = filedialog.askopenfilenames(
-        filetypes=(
-            ("Video Files", "*.mp4;*.avi;*.mov;*.flv;*.wmv"),  # Add or remove video formats as needed
-            ("Audio Files", "*.mp3;*.wav;*.aac;*.flac;*.ogg"),  # Add or remove audio formats as needed
-            ("All Files", "*.*")
+        self._running = False
+
+        self._build_ui()
+        self._app.protocol("WM_DELETE_WINDOW", self._on_close)
+
+        # Deferred backend init after window renders
+        self._app.after(100, self._init_backend)
+
+    # ------------------------------------------------------------------
+    # UI construction
+    # ------------------------------------------------------------------
+
+    def _build_ui(self) -> None:
+        root = self._app
+        root.columnconfigure(0, weight=1)
+        root.rowconfigure(1, weight=1)  # file table row grows
+
+        self._build_toolbar(root)
+        self._build_file_table(root)
+        self._build_settings(root)
+        self._build_progress(root)
+        self._build_statusbar(root)
+
+    def _build_toolbar(self, parent: tk.Widget) -> None:
+        bar = ttk.Frame(parent)
+        bar.grid(row=0, column=0, sticky="ew", padx=6, pady=(6, 2))
+
+        self._btn_add = ttk.Button(bar, text="Add Files", command=self._add_files)
+        self._btn_add.pack(side=LEFT, padx=2)
+
+        self._btn_remove = ttk.Button(bar, text="Remove Selected", command=self._remove_selected)
+        self._btn_remove.pack(side=LEFT, padx=2)
+
+        self._btn_clear = ttk.Button(bar, text="Clear", command=self._clear_files)
+        self._btn_clear.pack(side=LEFT, padx=2)
+
+        self._btn_transcribe = ttk.Button(
+            bar, text="Transcribe", bootstyle="success", command=self._start_transcribe
         )
-    )
-        if len(self.file_paths) > 10:  # If there are more than 10 files, only display the first and last 5
-            display_paths = [os.path.basename(path) for path in self.file_paths[:5]] + ["..."] + [os.path.basename(path) for path in self.file_paths[-5:]]
-        elif len(self.file_paths) == 0:
-            display_paths = "No files selected!"
-        else:  # If there are 10 or fewer files, display them all
-            display_paths = [os.path.basename(path) for path in self.file_paths]
+        self._btn_transcribe.pack(side=LEFT, padx=(12, 2))
 
-        # Format display paths for insertion into label
-        if isinstance(display_paths, list):
-            display_paths = '\n '.join(display_paths)
+        self._btn_stop = ttk.Button(
+            bar, text="Stop", bootstyle="danger", command=self._stop, state=DISABLED
+        )
+        self._btn_stop.pack(side=LEFT, padx=2)
 
-        self.file_label.insert(tk.INSERT, f'Selected file paths: {display_paths}\n')
+        self._dark_var = tk.BooleanVar(value=self._cfg.theme == "darkly")
+        cb_theme = ttk.Checkbutton(
+            bar, text="Dark mode", variable=self._dark_var, bootstyle="round-toggle",
+            command=self._toggle_theme,
+        )
+        cb_theme.pack(side=RIGHT, padx=4)
 
-    def transcribe_files(self):
-        if not any(var.get() for var in self.output_formats.values()):
-            messagebox.showerror("No Format", message="No format selected, select an output format to continue.")
-        else:
-            if DEBUG ==True:
-                pr = cProfile.Profile()
-                pr.enable()
-            self.start_time = time.time()
-            for file_path in self.file_paths:
-                self.job_queue.put(file_path)
-            self.progress['maximum'] = len(self.file_paths)
-            threading.Thread(target=self.worker_thread).start()
-            # Check the results queue every second
-            self.root.after(1000, self.check_results_queue)
-            if DEBUG == True:
-                pr.disable()
-                pr.dump_stats(f'transcribe_file_{os.path.basename(file_path)}.prof')
+    def _build_file_table(self, parent: tk.Widget) -> None:
+        frame = ttk.Frame(parent)
+        frame.grid(row=1, column=0, sticky="nsew", padx=6, pady=2)
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(0, weight=1)
 
-    def stop_transcription(self):
-        # Ties back to the stop button
-        self.executor.shutdown(wait=False)
-        self.executor = ThreadPoolExecutor(max_workers=self.max_workers.get())
+        cols = ("file", "status", "progress")
+        self._tree = ttk.Treeview(frame, columns=cols, show="headings", selectmode="extended")
+        self._tree.heading("file", text="File")
+        self._tree.heading("status", text="Status")
+        self._tree.heading("progress", text="Progress")
+        self._tree.column("file", width=380, stretch=True)
+        self._tree.column("status", width=90, stretch=False)
+        self._tree.column("progress", width=80, stretch=False)
+        self._tree.grid(row=0, column=0, sticky="nsew")
 
-    def worker_thread(self):
-        if DEBUG ==True:
-            pr = cProfile.Profile()
-            pr.enable()
-        self.controls_to_lock = [self.select_button, self.transcribe_button, self.clear_button, self.worker_slider]
-        # Start control lockout to prevent user tamper during transcript 
-        for widget in self.controls_to_lock:
-            widget.config(state=tk.DISABLED)
+        sb = ttk.Scrollbar(frame, orient=VERTICAL, command=self._tree.yview)
+        sb.grid(row=0, column=1, sticky="ns")
+        self._tree.configure(yscrollcommand=sb.set)
 
-        # Initialize the executor here
-        with ThreadPoolExecutor(max_workers=self.max_workers.get()) as executor:
-            while not self.job_queue.empty():
-                future = executor.submit(self.transcribe_file, self.job_queue.get())
-                future.add_done_callback(lambda x: self.root.after(0, self.update_progress))
+    def _build_settings(self, parent: tk.Widget) -> None:
+        outer = ttk.Frame(parent)
+        outer.grid(row=2, column=0, sticky="ew", padx=6, pady=2)
+        outer.columnconfigure(1, weight=1)
 
-            # The executor will automatically shut down here
-            # wait=True is implicit with the context manager
+        sf = ttk.LabelFrame(outer, text="Settings")
+        sf.grid(row=0, column=0, sticky="nsew", padx=(0, 4), ipadx=4, ipady=4)
 
-        self.end_time = time.time()  # Record the end time
-        elapsed_time = self.end_time - self.start_time  # Calculate elapsed time
+        ttk.Label(sf, text="Model:").grid(row=0, column=0, sticky="w")
+        self._model_var = tk.StringVar(value=self._cfg.model_size)
+        model_cb = ttk.Combobox(sf, textvariable=self._model_var, values=list(MODEL_SIZES),
+                                state="readonly", width=16)
+        model_cb.grid(row=0, column=1, sticky="w", padx=4)
+        model_cb.bind("<<ComboboxSelected>>", self._on_model_change)
+        ToolTip(model_cb, text="Larger models are more accurate but slower and use more VRAM.")
 
-        # Re-enable the controls after all the work is done
-        self.root.after(0, self.re_enable_controls)
-        # Convert elapsed time to hours, minutes, and seconds
-        hours, remainder = divmod(elapsed_time, 3600)
-        minutes, seconds = divmod(remainder, 60)
-        
-        # Build a formatted string based on the elapsed time
-        if hours:
-            formatted_time = f"{int(hours)} hours, {int(minutes)} minutes and {seconds:.2f} seconds"
-        elif minutes:
-            formatted_time = f"{int(minutes)} minutes and {seconds:.2f} seconds"
-        else:
-            formatted_time = f"{seconds:.2f} seconds"
+        ttk.Label(sf, text="Language:").grid(row=1, column=0, sticky="w", pady=(4, 0))
+        self._lang_var = tk.StringVar(value=self._cfg.language)
+        lang_cb = ttk.Combobox(sf, textvariable=self._lang_var, values=LANGUAGE_CHOICES,
+                               state="readonly", width=16)
+        lang_cb.grid(row=1, column=1, sticky="w", padx=4, pady=(4, 0))
+        lang_cb.bind("<<ComboboxSelected>>", self._on_lang_change)
+        ToolTip(lang_cb, text="'auto' lets the model detect the spoken language.")
 
-        if DEBUG == True:
-            pr.disable()
-            pr.dump_stats('worker_thread_profile.prof')
-        messagebox.showinfo("Done", f"Done transcribing. It took {formatted_time}.")
+        ttk.Label(sf, text="Output dir:").grid(row=2, column=0, sticky="w", pady=(4, 0))
+        self._outdir_var = tk.StringVar(value=self._cfg.output_dir or "")
+        outdir_entry = ttk.Entry(sf, textvariable=self._outdir_var, width=24)
+        outdir_entry.grid(row=2, column=1, sticky="ew", padx=4, pady=(4, 0))
+        ttk.Button(sf, text="Browse", command=self._browse_outdir, width=7).grid(
+            row=2, column=2, padx=2, pady=(4, 0)
+        )
+        ToolTip(outdir_entry, text="Leave empty to write output alongside each source file.")
+        self._outdir_var.trace_add("write", lambda *_: (
+            setattr(self._cfg, "output_dir", self._outdir_var.get().strip() or None),
+            save_config(self._cfg),
+        ))
 
-    def re_enable_controls(self):
-        for widget in self.controls_to_lock:
-            widget.config(state=tk.NORMAL)
+        ff = ttk.LabelFrame(outer, text="Output Formats")
+        ff.grid(row=0, column=1, sticky="nsew", ipadx=4, ipady=4)
 
-    def transcribe_file(self, file_path):
-        load_heavy_modules()
-        print(f"Transcribing file: {file_path}")
+        self._fmt_vars: dict[str, tk.BooleanVar] = {}
+        for i, fmt in enumerate(FORMAT_WRITERS.keys()):
+            var = tk.BooleanVar(value=fmt in self._cfg.formats)
+            self._fmt_vars[fmt] = var
+            cb = ttk.Checkbutton(ff, text=fmt.upper(), variable=var,
+                                 command=self._on_format_change)
+            cb.grid(row=i // 3, column=i % 3, sticky="w", padx=6)
+
+    def _build_progress(self, parent: tk.Widget) -> None:
+        self._progress = ttk.Progressbar(parent, orient=HORIZONTAL, mode="determinate",
+                                         bootstyle="success-striped", maximum=100)
+        self._progress.grid(row=3, column=0, sticky="ew", padx=6, pady=(2, 0))
+
+    def _build_statusbar(self, parent: tk.Widget) -> None:
+        self._status_var = tk.StringVar(value="Ready.")
+        bar = ttk.Label(parent, textvariable=self._status_var, anchor="w",
+                        bootstyle="secondary", padding=(6, 2))
+        bar.grid(row=4, column=0, sticky="ew")
+        self._status_label = bar
+
+    # ------------------------------------------------------------------
+    # Backend lifecycle
+    # ------------------------------------------------------------------
+
+    def _init_backend(self) -> None:
+        self._ensure_backend()
+        if self._worker:
+            self._set_status("Loading model...")
+            self._worker.preload()
+
+    def _ensure_backend(self) -> None:
+        """(Re)create backend and worker if model/lang params changed."""
+        lang = self._lang_var.get() if hasattr(self, "_lang_var") else self._cfg.language
+        model = self._model_var.get() if hasattr(self, "_model_var") else self._cfg.model_size
+
+        if (self._backend is not None
+                and model == self._backend_model
+                and lang == self._backend_lang
+                and self._worker is not None):
+            return
+
+        # Retire the previous worker: its thread would otherwise live forever,
+        # pin the old model in memory, and could fire stale callbacks at the UI.
+        if self._worker is not None:
+            self._worker.shutdown()
+
+        self._backend_model = model
+        self._backend_lang = lang
+        self._backend = create_backend(
+            model_size=model,
+            device="auto",
+            language=language_to_param(lang),
+        )
+        cbs = WorkerCallbacks(
+            on_file_start=self._on_file_start,
+            on_segment_progress=self._on_segment_progress,
+            on_file_done=self._on_file_done,
+            on_batch_done=self._on_batch_done,
+            on_status=self._set_status,
+        )
+        self._worker = TranscriptionWorker(
+            backend=self._backend,
+            dispatch=self._dispatch_to_ui,
+            callbacks=cbs,
+        )
+
+    def _dispatch_to_ui(self, fn) -> None:
+        """Schedule fn on the Tk thread; runs on the worker thread.
+
+        after() raises once the window is destroyed (e.g. worker finishes a
+        model load mid-close); swallow that instead of killing the worker
+        thread with an unhandled exception.
+        """
         try:
-            # Check if file exists
-            if not os.path.exists(file_path):
-                raise FileNotFoundError(f"File not found: {file_path}")
+            self._app.after(0, fn)
+        except (RuntimeError, tk.TclError):
+            pass
 
-            # Load the model in the thread
-            if getattr(sys, 'frozen', False):
-                # If running in a PyInstaller bundle
-                base_path = sys._MEIPASS
-            else:
-                # Normal Python environment
-                base_path = os.path.dirname(os.path.abspath(__file__))
+    # ------------------------------------------------------------------
+    # Toolbar actions
+    # ------------------------------------------------------------------
 
-            model_path = os.path.join(base_path, 'models')
-            try:
-                model = whisper.load_model(name="small", download_root=model_path).to(self.device)
-            except Exception as model_error:
-                raise RuntimeError(f"Failed to load model: {model_error}")
+    def _add_files(self) -> None:
+        paths = filedialog.askopenfilenames(
+            title="Select audio/video files",
+            filetypes=[
+                (
+                    "Media files",
+                    "*.mp4 *.avi *.mov *.flv *.wmv *.mp3 *.wav *.aac *.flac *.ogg *.m4a",
+                ),
+                ("All files", "*.*"),
+            ],
+        )
+        existing = set(self._file_paths)
+        added = 0
+        for p in paths:
+            if p not in existing:
+                self._file_paths.append(p)
+                existing.add(p)
+                self._tree.insert("", END, iid=p, values=(Path(p).name, "Queued", ""))
+                added += 1
+        if added:
+            self._set_status(f"Added {added} file(s). {len(self._file_paths)} total.")
 
-            transcription_response = model.transcribe(file_path, language='en', verbose=True)
+    def _remove_selected(self) -> None:
+        for iid in self._tree.selection():
+            self._tree.delete(iid)
+            if iid in self._file_paths:
+                self._file_paths.remove(iid)
 
-            for format, var in self.output_formats.items():
-                if var.get():
-                    output_filename = os.path.splitext(file_path)[0] + "." + format
-                    output_directory = os.path.dirname(output_filename)
-                    if not os.path.exists(output_directory):
-                        os.makedirs(output_directory)
+    def _clear_files(self) -> None:
+        self._tree.delete(*self._tree.get_children())
+        self._file_paths.clear()
+        self._progress["value"] = 0
+        self._set_status("Ready.")
 
-                    if format == "txt":
-                        try:
-                            with open(output_filename, 'w') as f:
-                                text_content = transcription_response.get('text', 'No transcription available')
-                                start_time = transcription_response.get('start', 'N/A')
-                                end_time = transcription_response.get('end', 'N/A')
-                                formatted_content = f"**Start Time:** {start_time}\n{text_content}"
-                                f.write(formatted_content)
-                        except IOError as io_error:
-                            raise IOError(f"Failed to write to file {output_filename}: {io_error}")
-                    else:
-                        try:
-                            output_writer = whisper.utils.get_writer(format, output_directory)
-                            output_writer(transcription_response, output_filename)
-                        except Exception as output_error:
-                            raise Exception(f"Error in writing output for format {format}: {output_error}")
+    def _browse_outdir(self) -> None:
+        d = filedialog.askdirectory(title="Select output directory")
+        if d:
+            self._outdir_var.set(d)
 
-            self.results_queue.put(("success", f"Successfully transcribed file: {file_path}"))
+    # ------------------------------------------------------------------
+    # Transcription control
+    # ------------------------------------------------------------------
 
-        except Exception as e:
-            self.results_queue.put(("error", f"An error occurred while transcribing: {str(e)}"))
+    def _start_transcribe(self) -> None:
+        if not self._file_paths:
+            self._set_status("No files added. Use 'Add Files' first.", danger=True)
+            return
+        formats = [fmt for fmt, var in self._fmt_vars.items() if var.get()]
+        if not formats:
+            self._set_status("No output format selected. Check at least one format.", danger=True)
+            return
 
-    def check_results_queue(self):
-        while not self.results_queue.empty():
-            result_type, result = self.results_queue.get()
-            if result_type == "error":
-                messagebox.showinfo("Transcription Error", result)
-        self.root.after(1000, self.check_results_queue)  # Check the results queue again in one second
+        self._ensure_backend()
+        assert self._worker is not None
 
-    def update_progress(self):
-        self.progress.step()
+        out_dir = self._outdir_var.get().strip() or None
+        lang = language_to_param(self._lang_var.get())
+        jobs = build_jobs(self._file_paths, formats, out_dir, lang)
 
-    def run(self):
-        self.root.mainloop()
+        for p in self._file_paths:
+            self._tree_set(p, status="Queued", progress="")
 
-def load_heavy_modules():
-    global whisper, torch, subprocess
-    import whisper
-    import torch
-    import subprocess
+        self._progress["value"] = 0
+        self._running = True
+        self._set_running_state(running=True)
+        self._worker.submit(jobs)
 
-if __name__ == '__main__':
-    app = WhisperTranscriberApp()
+        if not find_ffmpeg():
+            logger.warning("ffmpeg not found; PyAV handles decoding but some formats may fail")
+            self._set_status("Transcribing... (note: ffmpeg not found; PyAV handles decoding)")
+        else:
+            self._set_status("Transcribing...")
+
+    def _stop(self) -> None:
+        if self._worker:
+            self._worker.stop()
+        self._set_status("Stop requested...")
+
+    # ------------------------------------------------------------------
+    # Worker callbacks (always called on Tk thread via dispatch)
+    # ------------------------------------------------------------------
+
+    def _on_file_start(self, path: str) -> None:
+        self._tree_set(path, status="Running", progress="0%")
+        self._progress["value"] = 0
+
+    def _on_segment_progress(self, path: str, fraction: float) -> None:
+        pct = int(fraction * 100)
+        self._tree_set(path, progress=f"{pct}%")
+        self._progress["value"] = pct
+
+    def _on_file_done(self, result: FileResult) -> None:
+        if result.ok:
+            self._tree_set(result.path, status="Done", progress="100%")
+        elif "Cancelled" in result.message:
+            self._tree_set(result.path, status="Cancelled", progress="")
+        else:
+            self._tree_set(result.path, status="Failed", progress="")
+            logger.error("Failed %s: %s", result.path, result.message)
+
+    def _on_batch_done(self, ok: int, fail: int, elapsed: float) -> None:
+        self._running = False
+        self._set_running_state(running=False)
+        for iid in self._tree.get_children():
+            if self._tree.set(iid, "status") == "Queued":
+                self._tree_set(iid, status="Cancelled", progress="")
+        summary = (
+            f"Done: {ok} ok, {fail} failed in {format_elapsed(elapsed)} (log: {self._log_path})"
+        )
+        self._set_status(summary)
+        self._progress["value"] = 100 if fail == 0 and ok > 0 else self._progress["value"]
+
+    # ------------------------------------------------------------------
+    # Settings change handlers
+    # ------------------------------------------------------------------
+
+    def _on_model_change(self, _event: object = None) -> None:
+        self._cfg.model_size = self._model_var.get()
+        save_config(self._cfg)
+        # Backend will be recreated lazily on next transcribe / explicit preload
+
+    def _on_lang_change(self, _event: object = None) -> None:
+        self._cfg.language = self._lang_var.get()
+        save_config(self._cfg)
+
+    def _on_format_change(self) -> None:
+        self._cfg.formats = [f for f, v in self._fmt_vars.items() if v.get()]
+        save_config(self._cfg)
+
+    def _toggle_theme(self) -> None:
+        theme = "darkly" if self._dark_var.get() else "yeti"
+        self._app.style.theme_use(theme)
+        self._cfg.theme = theme
+        save_config(self._cfg)
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _tree_set(self, iid: str, **kwargs: str) -> None:
+        """Update treeview columns by name; silently skip unknown iids."""
+        if self._tree.exists(iid):
+            for col, val in kwargs.items():
+                self._tree.set(iid, col, val)
+
+    def _set_status(self, text: str, danger: bool = False) -> None:
+        self._status_var.set(text)
+        style = "danger" if danger else "secondary"
+        self._status_label.configure(bootstyle=style)
+        logger.info("Status: %s", text)
+
+    def _set_running_state(self, running: bool) -> None:
+        state = DISABLED if running else NORMAL
+        idle_state = NORMAL if running else DISABLED
+        for btn in (self._btn_add, self._btn_remove, self._btn_clear, self._btn_transcribe):
+            btn.configure(state=state)
+        self._btn_stop.configure(state=idle_state)
+
+    def _on_close(self) -> None:
+        if self._worker:
+            self._worker.stop()
+        self._cfg.output_dir = self._outdir_var.get().strip() or None
+        self._cfg.model_size = self._model_var.get()
+        self._cfg.language = self._lang_var.get()
+        self._cfg.formats = [f for f, v in self._fmt_vars.items() if v.get()]
+        save_config(self._cfg)
+        self._app.destroy()
+
+    def run(self) -> None:
+        self._app.mainloop()
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    app = TranscriberApp()
     app.run()
