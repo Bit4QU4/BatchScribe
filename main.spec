@@ -1,44 +1,51 @@
+# -*- mode: python ; coding: utf-8 -*-
+
 import os
+from PyInstaller.utils.hooks import collect_data_files
 
-block_cipher = None
+# Analysis binaries take (source, dest_dir) 2-tuples; post-Analysis TOC
+# entries are 3-tuples, so the bundled ffmpeg must be declared here.
+_extra_binaries = [("ffmpeg.exe", ".")] if os.path.exists("ffmpeg.exe") else []
 
-ffmpeg_bin = ('ffmpeg.exe', '.')
+a = Analysis(
+    ['main.py'],
+    pathex=[],
+    binaries=_extra_binaries,
+    datas=collect_data_files('faster_whisper'),
+    hiddenimports=[],
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=[],
+    noarchive=False,
+)
+pyz = PYZ(a.pure)
 
-# Define the path to the Whisper assets
-whisper_assets_path = 'C:/Python310/Lib/site-packages/whisper/assets'
-whisper_assets = (whisper_assets_path, 'whisper/assets')
+exe = EXE(
+    pyz,
+    a.scripts,
+    exclude_binaries=True,
+    name='TranscriptionHackery',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=False,
+    upx_exclude=[],
+    runtime_tmpdir=None,
+    console=False,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+)
 
-# Define the path to the small.pt model in the models directory
-small_pt_model = ('./models/small.pt', 'models/')
-
-a = Analysis(['main.py'],
-             pathex=['.'],
-             binaries=[ffmpeg_bin],
-             datas=[whisper_assets, small_pt_model],  # Include Whisper assets and small.pt model
-             hiddenimports=['torch', 'whisper', 'tkinter', 'ttkbootstrap'],
-             hookspath=[],
-             runtime_hooks=[],
-             excludes=[],
-             win_no_prefer_redirects=False,
-             win_private_assemblies=False,
-             cipher=block_cipher,
-             noarchive=False)
-
-pyz = PYZ(a.pure, a.zipped_data,
-          cipher=block_cipher)
-
-exe = EXE(pyz,
-          a.scripts,
-          a.binaries,
-          a.zipfiles,
-          a.datas,
-          [],
-          name='Whisper Transcriber',
-          debug=True,
-          bootloader_ignore_signals=False,
-          strip=False,
-          upx=True,
-          upx_exclude=[],
-          runtime_tmpdir=None,
-          console=True,
-          icon='./icon.ico')
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=False,
+    upx_exclude=[],
+    name='TranscriptionHackery',
+)
