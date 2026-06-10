@@ -43,10 +43,11 @@ def default_models_dir() -> Path:
 def _add_nvidia_dll_dirs() -> None:
     """CTranslate2 loads cuBLAS/cuDNN by DLL name; the pip nvidia-* wheels
     install them under site-packages/nvidia/*/bin, outside the Windows DLL
-    search path, so register those directories explicitly."""
+    search path, so expose those directories explicitly."""
     if sys.platform != "win32":
         return
     import site
+    import sysconfig
 
     candidates: set[Path] = set()
     try:
@@ -57,13 +58,23 @@ def _add_nvidia_dll_dirs() -> None:
         candidates.add(Path(site.getusersitepackages()))
     except Exception:
         pass
+    purelib = sysconfig.get_paths().get("purelib")
+    if purelib:
+        candidates.add(Path(purelib))
+
     for root in candidates:
         nvidia = root / "nvidia"
         if not nvidia.is_dir():
             continue
         for bin_dir in nvidia.glob("*/bin"):
+            bin_str = str(bin_dir)
+            # CTranslate2 resolves CUDA DLLs with plain LoadLibrary, which
+            # searches PATH but ignores add_dll_directory registrations, so
+            # both are needed.
+            if bin_str not in os.environ.get("PATH", ""):
+                os.environ["PATH"] = bin_str + os.pathsep + os.environ.get("PATH", "")
             try:
-                os.add_dll_directory(str(bin_dir))
+                os.add_dll_directory(bin_str)
             except OSError:
                 pass
 
