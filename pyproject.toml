@@ -9,6 +9,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+gpu = [
+    "nvidia-cublas-cu12",
+    "nvidia-cudnn-cu12>=9,<10",
+]
 dev = [
     "pytest>=7.0",
     "ruff>=0.1",

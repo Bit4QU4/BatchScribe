@@ -1,0 +1,5 @@
+# NVIDIA runtime libraries for GPU inference (CUDA 12 + cuDNN 9).
+# Install alongside requirements.txt: pip install -r requirements-gpu.txt
+# engine.py registers these wheels' DLL directories automatically on Windows.
+nvidia-cublas-cu12
+nvidia-cudnn-cu12>=9,<10

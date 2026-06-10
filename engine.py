@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import abc
+import itertools
+import logging
 import os
+import sys
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
+
+logger = logging.getLogger("transcriber")
 
 # faster-whisper 1.x exposes these sizes; "turbo" is an alias for "large-v3-turbo"
 # in some builds but is not a canonical HF model name — omit to avoid silent 404s.
@@ -33,6 +38,39 @@ def default_models_dir() -> Path:
         base = Path.home() / ".local" / "share" / "TranscriptionHackery" / "models"
     base.mkdir(parents=True, exist_ok=True)
     return base
+
+
+def _add_nvidia_dll_dirs() -> None:
+    """CTranslate2 loads cuBLAS/cuDNN by DLL name; the pip nvidia-* wheels
+    install them under site-packages/nvidia/*/bin, outside the Windows DLL
+    search path, so register those directories explicitly."""
+    if sys.platform != "win32":
+        return
+    import site
+
+    candidates: set[Path] = set()
+    try:
+        candidates.update(Path(p) for p in site.getsitepackages())
+    except Exception:
+        pass
+    try:
+        candidates.add(Path(site.getusersitepackages()))
+    except Exception:
+        pass
+    for root in candidates:
+        nvidia = root / "nvidia"
+        if not nvidia.is_dir():
+            continue
+        for bin_dir in nvidia.glob("*/bin"):
+            try:
+                os.add_dll_directory(str(bin_dir))
+            except OSError:
+                pass
+
+
+def _is_cuda_library_error(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return any(marker in text for marker in ("cublas", "cudnn", "cudart", "cuda"))
 
 
 @dataclass(slots=True)
@@ -117,6 +155,8 @@ class FasterWhisperBackend(TranscriptionBackend):
         from faster_whisper import WhisperModel  # lazy import
 
         self._resolved_device = self._resolve_device()
+        if self._resolved_device == "cuda":
+            _add_nvidia_dll_dirs()
         compute_type = "float16" if self._resolved_device == "cuda" else "int8"
         self._model = WhisperModel(
             self._effective_model_name(self._language),
@@ -124,6 +164,18 @@ class FasterWhisperBackend(TranscriptionBackend):
             compute_type=compute_type,
             download_root=str(self._models_dir),
         )
+
+    def _start_transcription(self, path: str, language: str | None):
+        """Prefetch the first segment so CUDA runtime failures (which surface
+        on the first encode, not at model load) are raised here."""
+        fw_segments, info = self._model.transcribe(
+            path,
+            language=language,
+            vad_filter=True,
+        )
+        seg_iter = iter(fw_segments)
+        first = next(seg_iter, None)
+        return info, first, seg_iter
 
     def transcribe(
         self,
@@ -133,16 +185,23 @@ class FasterWhisperBackend(TranscriptionBackend):
         if self._model is None:
             self.load()
 
-        fw_segments, info = self._model.transcribe(
-            path,
-            language=language,
-            vad_filter=True,
-        )
+        try:
+            info, first, rest = self._start_transcription(path, language)
+        except RuntimeError as exc:
+            if self._resolved_device != "cuda" or not _is_cuda_library_error(exc):
+                raise
+            logger.warning("CUDA runtime unavailable (%s); falling back to CPU", exc)
+            self._model = None
+            self._device_arg = "cpu"
+            self.load()
+            info, first, rest = self._start_transcription(path, language)
 
         ti = TranscriptionInfo(
             duration=info.duration,
             language=info.language,
         )
+
+        fw_segments = itertools.chain([first], rest) if first is not None else iter(())
 
         def _iter() -> Iterator[Segment]:
             for seg in fw_segments:

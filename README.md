@@ -38,14 +38,18 @@ The app opens with default settings (model: small, language: English, output for
 
 ### NVIDIA (CUDA)
 
-Requires CUDA 12 and cuDNN 9. CTranslate2 auto-detects CUDA availability; if present, uses float16 compute for speed and memory efficiency.
+Requires the CUDA 12 cuBLAS and cuDNN 9 runtime libraries. CTranslate2 auto-detects CUDA availability; if present, uses float16 compute for speed and memory efficiency.
+
+The easiest way to get the libraries is the GPU extras file; the app registers the wheel-installed DLL directories automatically on Windows:
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements.txt -r requirements-gpu.txt
 python main.py
 ```
 
-If CUDA is unavailable, the app falls back to CPU with int8 quantization.
+Alternatively, install the CUDA 12 Toolkit and cuDNN 9 system-wide so the DLLs (`cublas64_12.dll`, `cudnn_ops64_9.dll`, ...) are on PATH.
+
+If CUDA is unavailable, or its libraries are missing at runtime, the app logs a warning and falls back to CPU with int8 quantization instead of failing the batch.
 
 ### CPU
 
