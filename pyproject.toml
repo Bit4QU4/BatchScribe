@@ -1,0 +1,30 @@
+[project]
+name = "transcription-hackery"
+version = "0.2.0"
+description = "Python desktop app for transcription with faster-whisper and tkinter GUI"
+requires-python = ">=3.10"
+dependencies = [
+    "faster-whisper==1.2.1",
+    "ttkbootstrap==1.20.3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "ruff>=0.1",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = []
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests insert the repo root on sys.path before importing project modules.
+"tests/*" = ["E402"]
