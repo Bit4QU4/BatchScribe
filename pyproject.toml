@@ -1,5 +1,5 @@
 [project]
-name = "transcription-hackery"
+name = "batchscribe"
 version = "0.2.0"
 description = "Python desktop app for transcription with faster-whisper and tkinter GUI"
 requires-python = ">=3.10"

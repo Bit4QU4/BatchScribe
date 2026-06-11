@@ -1,4 +1,4 @@
-# TranscriptionHackery — Execution Tasklist
+# BatchScribe — Execution Tasklist
 Priorities: **performance first**, then looks, then
 long-term updatability.
 
@@ -44,7 +44,7 @@ Effort: S = <2h, M = half/full day, L = multi-day.
       first job doesn't stall.
 - [x] **Model management** (M, Med) — model-size dropdown (tiny→large-v3, default
       `small`/`distil-small.en` on GPU), use `.en` variants when language is English; store models
-      in `%LOCALAPPDATA%\TranscriptionHackery\models` (not the exe bundle, not git) with a
+      in `%LOCALAPPDATA%\BatchScribe\models` (not the exe bundle, not git) with a
       download-progress bar.
 - [ ] **Re-run benchmark, record results in README** (S, High).
 

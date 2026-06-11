@@ -8,11 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **Renamed to BatchScribe** (was TranscriptionHackery / "AV Voice2Text"): window title, executable, app-data directory (%LOCALAPPDATA%\BatchScribe), and repository. Existing model caches under the old directory name are simply re-downloaded, or move the folder manually.
 - **Engine swap**: Replaced openai-whisper + torch with faster-whisper (CTranslate2). 2-4x faster inference, removes 2GB torch dependency, cleaner CUDA handling.
 - **Single worker thread**: Replaced ThreadPoolExecutor with one persistent daemon thread. Sequential processing avoids GPU contention and simplifies cancellation.
 - **GUI overhaul**: Ttkbootstrap Treeview for per-file status (Queued/Running/Done/Failed) and progress. Dark/light theme toggle persisted. Inline status bar replaces messagebox spam.
 - **Output formats**: Added md (Markdown with timestamps), json, vtt, srt writers. Txt and formats configurable in GUI.
-- **Config & logging**: App settings (theme, model size, language, formats, output dir) persisted to disk. Rotating file logger to %LOCALAPPDATA%\TranscriptionHackery\transcription.log.
+- **Config & logging**: App settings (theme, model size, language, formats, output dir) persisted to disk. Rotating file logger to %LOCALAPPDATA%\BatchScribe\transcription.log.
 - **Model management**: Model size dropdown (tiny-large-v3). Models cache in %LOCALAPPDATA% (or ~/.local/share on Linux), download on demand.
 - **Packaging**: PyInstaller one-dir (not one-file); faster startup and easier distribution.
 

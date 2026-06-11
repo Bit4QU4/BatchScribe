@@ -31,7 +31,7 @@ Pure helper functions (tested in `tests/test_app_logic.py`):
 - Resolves device at load time (auto-detect CUDA, fallback to CPU)
 - Compute type: float16 on CUDA, int8 on CPU
 - VAD filter enabled by default (skips silence)
-- Downloads models to `%LOCALAPPDATA%/TranscriptionHackery/models` (Windows) or `~/.local/share/TranscriptionHackery/models` (Linux)
+- Downloads models to `%LOCALAPPDATA%/BatchScribe/models` (Windows) or `~/.local/share/BatchScribe/models` (Linux)
 
 **Segment** (dataclass): `start`, `end`, `text`, optional `speaker`
 

@@ -14,9 +14,9 @@ from pathlib import Path
 def config_dir() -> Path:
     localappdata = os.environ.get("LOCALAPPDATA")
     if localappdata:
-        base = Path(localappdata) / "TranscriptionHackery"
+        base = Path(localappdata) / "BatchScribe"
     else:
-        base = Path.home() / ".local" / "share" / "TranscriptionHackery"
+        base = Path.home() / ".local" / "share" / "BatchScribe"
     base.mkdir(parents=True, exist_ok=True)
     return base
 

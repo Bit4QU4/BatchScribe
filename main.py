@@ -1,4 +1,4 @@
-"""GUI entry point for TranscriptionHackery."""
+"""GUI entry point for BatchScribe."""
 
 from __future__ import annotations
 
@@ -72,7 +72,7 @@ class TranscriberApp:
             logger.warning("Unknown theme %r; falling back to darkly", self._cfg.theme)
             self._cfg.theme = "darkly"
             self._app = ttk.Window(themename="darkly")
-        self._app.title("AV Voice2Text")
+        self._app.title("BatchScribe")
         self._app.minsize(700, 480)
         self._app.resizable(True, True)
 

@@ -20,7 +20,7 @@ exe = EXE(
     pyz,
     a.scripts,
     exclude_binaries=True,
-    name='TranscriptionHackery',
+    name='BatchScribe',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -42,5 +42,5 @@ coll = COLLECT(
     strip=False,
     upx=False,
     upx_exclude=[],
-    name='TranscriptionHackery',
+    name='BatchScribe',
 )

@@ -33,9 +33,9 @@ def default_models_dir() -> Path:
     """Return (and create) the platform-appropriate model cache directory."""
     localappdata = os.environ.get("LOCALAPPDATA")
     if localappdata:
-        base = Path(localappdata) / "TranscriptionHackery" / "models"
+        base = Path(localappdata) / "BatchScribe" / "models"
     else:
-        base = Path.home() / ".local" / "share" / "TranscriptionHackery" / "models"
+        base = Path.home() / ".local" / "share" / "BatchScribe" / "models"
     base.mkdir(parents=True, exist_ok=True)
     return base
 
