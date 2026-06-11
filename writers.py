@@ -58,10 +58,9 @@ def write_srt(segments: Sequence[Segment], path: Path) -> None:
 
 
 def write_md(segments: Sequence[Segment], path: Path) -> None:
-    """Bold 'start - end' timestamp header then text, matching vttmd.py style."""
+    """Bold 'start - end' timestamp header then text."""
     with open(path, "w", encoding="utf-8") as f:
         for seg in segments:
-            # vttmd.py uses timedelta str; replicate with zero-padded HH:MM:SS.mmm
             f.write(f"**{_fmt_ts(seg.start, '.')} - {_fmt_ts(seg.end, '.')}**:")
             f.write(seg.text + "\n")
 

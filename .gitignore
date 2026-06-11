@@ -38,6 +38,8 @@ tst1.md
 .claude/
 
 # Internal planning notes (kept local only)
+mp3titler.py
+vttmd.py
 CLAUDE.md
 ARCHITECTURE.md
 CHANGELOG.md

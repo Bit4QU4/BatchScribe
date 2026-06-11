@@ -1,7 +1,7 @@
 """Deterministic adversarial tests for the pure layers (no hypothesis).
 
-Covers writers, config loading, vttmd/mp3titler helpers, main.py pure helpers,
-and worker shutdown semantics.
+Covers writers, config loading, main.py pure helpers, and worker shutdown
+semantics.
 """
 
 from __future__ import annotations
@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import sys
 import time
-import types
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -17,21 +16,10 @@ _repo = Path(__file__).resolve().parent.parent
 if str(_repo) not in sys.path:
     sys.path.insert(0, str(_repo))
 
-# vttmd/mp3titler import optional deps at module top; the functions under test
-# here are pure, so stub the deps if absent to keep this file dependency-free.
-for _mod in ("webvtt", "eyed3"):
-    if _mod not in sys.modules:
-        try:
-            __import__(_mod)
-        except ImportError:
-            sys.modules[_mod] = types.ModuleType(_mod)
-
 import config as cfg_mod
 from config import AppConfig, load_config
 from engine import Segment, TranscriptionBackend, TranscriptionInfo
 from main import build_jobs, format_elapsed, language_to_param
-from mp3titler import sanitize_filename
-from vttmd import convert_time
 from worker import TranscriptionWorker, WorkerCallbacks
 from writers import (
     FORMAT_WRITERS,
@@ -233,58 +221,6 @@ def test_config_valid_values_applied(tmp_path: Path):
 def test_config_output_dir_null_allowed(tmp_path: Path):
     cfg = _load_with(tmp_path, json.dumps({"output_dir": None}))
     assert cfg.output_dir is None
-
-
-# ---------------------------------------------------------------------------
-# vttmd.convert_time / mp3titler.sanitize_filename
-# ---------------------------------------------------------------------------
-
-def test_convert_time_edges():
-    assert convert_time(0) == "0:00:00"
-    assert convert_time(59) == "0:00:59"
-    assert convert_time(3600) == "1:00:00"
-    assert convert_time(3661.5) == "1:01:01.500000"
-    # timedelta semantics for negatives — documented current behavior
-    assert convert_time(-1) == "-1 day, 23:59:59"
-
-
-def test_sanitize_strips_invalid_chars():
-    assert sanitize_filename('a/b\\c:d*e?f"g<h>i|j') == "abcdefghij"
-    assert sanitize_filename("tab\there\x00null") == "tabherenull"
-
-
-def test_sanitize_reserved_windows_names():
-    assert sanitize_filename("CON") == "_CON"
-    assert sanitize_filename("con") == "_con"
-    assert sanitize_filename("NUL.song") == "_NUL.song"
-    assert sanitize_filename("COM1") == "_COM1"
-    assert sanitize_filename("LPT9") == "_LPT9"
-    # Not reserved: CONSOLE, COM10
-    assert sanitize_filename("CONSOLE") == "CONSOLE"
-    assert sanitize_filename("COM10") == "COM10"
-
-
-def test_sanitize_trailing_dots_and_spaces():
-    assert sanitize_filename("name...") == "name"
-    assert sanitize_filename("name   ") == "name"
-    assert sanitize_filename("name. .") == "name"
-
-
-def test_sanitize_empty_results():
-    assert sanitize_filename("") == "untitled"
-    assert sanitize_filename("???") == "untitled"
-    assert sanitize_filename("...") == "untitled"
-
-
-def test_sanitize_length_capped():
-    name = sanitize_filename("x" * 300)
-    assert len(name) <= 240
-    # Suffix room: name + "_999" + ".mp3" stays under 255
-    assert len(name) + len("_999.mp3") <= 255
-
-
-def test_sanitize_keeps_unicode():
-    assert sanitize_filename("中文歌曲") == "中文歌曲"
 
 
 # ---------------------------------------------------------------------------

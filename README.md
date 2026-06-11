@@ -73,28 +73,6 @@ Logs are at:
 - Windows: `%LOCALAPPDATA%\BatchScribe\transcription.log`
 - Linux: `~/.local/share/BatchScribe/transcription.log`
 
-## Helper Scripts
-
-### vttmd.py
-
-Convert VTT transcript to Markdown with timestamps:
-
-```bash
-python vttmd.py  # prompts for directory
-```
-
-For each `.vtt` file in the directory, writes a `.md` file with bold timestamp headers.
-
-### mp3titler.py
-
-Rename MP3 files by their ID3 tag title:
-
-```bash
-python mp3titler.py <directory>
-```
-
-Reads ID3 tags and renames files sanitized titles. Handles duplicates by appending `_2`, `_3`, etc.
-
 ## Building (PyInstaller)
 
 See `scripts/build.md` for detailed instructions.
