@@ -80,6 +80,8 @@ class TranscriberApp:
         # Current backend params so we can detect when recreation is needed
         self._backend_model: str = self._cfg.model_size
         self._backend_lang: str = self._cfg.language
+        self._backend_strict_vad: bool = self._cfg.strict_vad
+        self._backend_initial_prompt: str = self._cfg.initial_prompt
         self._backend: TranscriptionBackend | None = None
         self._worker: TranscriptionWorker | None = None
 
@@ -192,6 +194,35 @@ class TranscriberApp:
         # file on every keystroke; _on_close still does the final sync.
         outdir_entry.bind("<FocusOut>", self._on_outdir_change)
 
+        ttk.Label(sf, text="Vocabulary hint:").grid(row=3, column=0, sticky="w", pady=(4, 0))
+        self._prompt_var = tk.StringVar(value=self._cfg.initial_prompt)
+        prompt_entry = ttk.Entry(sf, textvariable=self._prompt_var, width=24)
+        prompt_entry.grid(row=3, column=1, columnspan=2, sticky="ew", padx=4, pady=(4, 0))
+        ToolTip(
+            prompt_entry,
+            text=(
+                "Optional text that biases recognition toward specific names or terms. "
+                "Useful for unusual proper nouns, acronyms, or domain vocabulary."
+            ),
+        )
+        prompt_entry.bind("<FocusOut>", self._on_prompt_change)
+
+        self._strict_vad_var = tk.BooleanVar(value=self._cfg.strict_vad)
+        strict_cb = ttk.Checkbutton(
+            sf,
+            text="Strict silence filtering",
+            variable=self._strict_vad_var,
+            command=self._on_strict_vad_change,
+        )
+        strict_cb.grid(row=4, column=0, columnspan=3, sticky="w", pady=(4, 0))
+        ToolTip(
+            strict_cb,
+            text=(
+                "Applies tighter VAD thresholds to cut more silence. "
+                "Reduces hallucinations on quiet recordings but may clip soft speech."
+            ),
+        )
+
         ff = ttk.LabelFrame(outer, text="Output Formats")
         ff.grid(row=0, column=1, sticky="nsew", ipadx=4, ipady=4)
 
@@ -226,13 +257,17 @@ class TranscriberApp:
             self._worker.preload()
 
     def _ensure_backend(self) -> None:
-        """(Re)create backend and worker if model/lang params changed."""
+        """(Re)create backend and worker if any construction-time params changed."""
         lang = self._lang_var.get()
         model = self._model_var.get()
+        strict_vad = self._strict_vad_var.get()
+        initial_prompt = self._prompt_var.get().strip()
 
         if (self._backend is not None
                 and model == self._backend_model
                 and lang == self._backend_lang
+                and strict_vad == self._backend_strict_vad
+                and initial_prompt == self._backend_initial_prompt
                 and self._worker is not None):
             return
 
@@ -243,10 +278,14 @@ class TranscriberApp:
 
         self._backend_model = model
         self._backend_lang = lang
+        self._backend_strict_vad = strict_vad
+        self._backend_initial_prompt = initial_prompt
         self._backend = create_backend(
             model_size=model,
             device="auto",
             language=language_to_param(lang),
+            initial_prompt=initial_prompt or None,
+            strict_vad=strict_vad,
         )
         cbs = WorkerCallbacks(
             on_file_start=self._on_file_start,
@@ -372,7 +411,7 @@ class TranscriberApp:
             self._tree_set(result.path, status="Cancelled", progress="")
         else:
             self._tree_set(result.path, status="Failed", progress="")
-            logger.error("Failed %s: %s", result.path, result.message)
+            logger.error("Failed %s: %s", Path(result.path).name, result.message)
 
     def _on_batch_done(self, ok: int, fail: int, elapsed: float) -> None:
         self._running = False
@@ -407,6 +446,12 @@ class TranscriberApp:
     def _on_outdir_change(self, _event: object = None) -> None:
         self._save_setting("output_dir", self._outdir_var.get().strip() or None)
 
+    def _on_prompt_change(self, _event: object = None) -> None:
+        self._save_setting("initial_prompt", self._prompt_var.get().strip())
+
+    def _on_strict_vad_change(self) -> None:
+        self._save_setting("strict_vad", self._strict_vad_var.get())
+
     def _toggle_theme(self) -> None:
         theme = "darkly" if self._dark_var.get() else "yeti"
         self._app.style.theme_use(theme)
@@ -438,9 +483,9 @@ class TranscriberApp:
     def _on_close(self) -> None:
         if self._worker:
             self._worker.stop()
-        # Other settings save eagerly in their change handlers; the entry may
-        # still hold an un-FocusOut'd edit, so sync it here.
+        # Entries may hold un-FocusOut'd edits; flush both here as a last sync.
         self._save_setting("output_dir", self._outdir_var.get().strip() or None)
+        self._save_setting("initial_prompt", self._prompt_var.get().strip())
         self._app.destroy()
 
     def run(self) -> None:

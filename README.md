@@ -22,6 +22,14 @@ python main.py
 
 The app opens with default settings (model: small, language: English, output format: txt).
 
+## Privacy
+
+BatchScribe runs entirely on your machine. Audio, transcripts, and settings are
+never uploaded anywhere; the only network traffic is the one-time model download
+from Hugging Face. Logs live in your local app-data directory and record file
+*names* only (never full paths) — delete the log file any time if you transcribe
+sensitive material. See SECURITY.md for the full picture.
+
 ## Features
 
 - **Fast inference**: faster-whisper engine (2-4x faster than openai-whisper)

@@ -1,0 +1,15 @@
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    # Version pins are bumped deliberately each quarter (scripts/update_deps.md);
+    # Dependabot is here for security advisories, not routine version churn.
+    open-pull-requests-limit: 5
+    allow:
+      - dependency-type: all
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

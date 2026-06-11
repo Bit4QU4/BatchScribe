@@ -216,11 +216,13 @@ class TranscriptionWorker:
 
             elapsed = time.monotonic() - t0
             result = FileResult(path=path, ok=True, message="OK", elapsed=elapsed)
-            logger.info("Done %s in %.1fs", path, elapsed)
+            # Logs record the basename only: full paths of recordings are
+            # sensitive metadata and the log file outlives the session.
+            logger.info("Done %s in %.1fs", Path(path).name, elapsed)
 
         except Exception as exc:
             elapsed = time.monotonic() - t0
-            logger.exception("Failed to transcribe %s", path)
+            logger.exception("Failed to transcribe %s", Path(path).name)
             result = FileResult(path=path, ok=False, message=str(exc), elapsed=elapsed)
 
         self._cb(lambda r=result: self._callbacks.on_file_done and self._callbacks.on_file_done(r))

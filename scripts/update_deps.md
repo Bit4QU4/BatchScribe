@@ -29,9 +29,17 @@ Follow this checklist to update and validate dependencies:
    - Update requirements.txt with new pinned versions
    - Update pyproject.toml [project] dependencies section with matching pins
 
-6. Note the new versions and any relevant changes in the release notes
+6. Regenerate the lockfile and review the transitive diff
+   ```
+   uv lock
+   git diff uv.lock   # every transitive bump (ctranslate2, av, onnxruntime...) is visible here
+   ```
+   The lockfile is the source of truth for reproducible installs: `uv sync` (or
+   `uv pip install -r pyproject.toml`) recreates the exact environment anywhere.
 
-7. Create a git tag for the release
+7. Note the new versions and any relevant changes in the release notes
+
+8. Create a git tag for the release
    ```
    git tag -a v0.2.X -m "Release v0.2.X with updated dependencies"
    ```

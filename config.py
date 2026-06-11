@@ -28,6 +28,8 @@ class AppConfig:
     language: str = "en"
     formats: list[str] = field(default_factory=lambda: ["txt"])
     output_dir: str | None = None
+    initial_prompt: str = ""
+    strict_vad: bool = False
 
 
 _CONFIG_FILE = "config.json"
@@ -53,9 +55,12 @@ def load_config() -> AppConfig:
         elif key == "formats":
             if isinstance(val, list) and all(isinstance(x, str) for x in val):
                 cfg.formats = val
-        elif key in ("theme", "model_size", "language"):
+        elif key in ("theme", "model_size", "language", "initial_prompt"):
             if isinstance(val, str):
                 setattr(cfg, key, val)
+        elif key == "strict_vad":
+            if isinstance(val, bool):
+                cfg.strict_vad = val
     return cfg
 
 

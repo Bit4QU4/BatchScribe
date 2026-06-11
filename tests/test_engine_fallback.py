@@ -18,7 +18,7 @@ class _FakeModel:
     def __init__(self, model_name, device, compute_type, download_root):
         self.device = device
 
-    def transcribe(self, path, language=None, vad_filter=True):
+    def transcribe(self, path, language=None, **kwargs):
         info = SimpleNamespace(duration=2.0, language=language or "en")
 
         def gen():
@@ -46,7 +46,7 @@ def test_cuda_library_error_falls_back_to_cpu(monkeypatch, tmp_path):
 
 def test_non_cuda_runtime_error_propagates(monkeypatch, tmp_path):
     class _BrokenModel(_FakeModel):
-        def transcribe(self, path, language=None, vad_filter=True):
+        def transcribe(self, path, language=None, **kwargs):
             raise RuntimeError("Invalid audio stream")
 
     monkeypatch.setattr(faster_whisper, "WhisperModel", _BrokenModel)

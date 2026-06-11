@@ -111,6 +111,7 @@ class TranscriptionBackend(abc.ABC):
         self,
         path: str,
         language: str | None = "en",
+        initial_prompt: str | None = None,
     ) -> tuple[TranscriptionInfo, Iterator[Segment]]:
         """Return metadata and a lazy segment iterator."""
 
@@ -131,11 +132,17 @@ class FasterWhisperBackend(TranscriptionBackend):
         device: str = "auto",
         models_dir: Path | None = None,
         language: str | None = "en",
+        initial_prompt: str | None = None,
+        strict_vad: bool = False,
     ) -> None:
         self._model_size = model_size
         self._device_arg = device
         self._models_dir = models_dir or default_models_dir()
         self._language = language
+        # Empty string is indistinguishable from no hint; normalize to None so
+        # faster-whisper does not bias from an empty context window.
+        self._initial_prompt: str | None = initial_prompt or None
+        self._strict_vad = strict_vad
         self._model = None
         self._resolved_device: str = "cpu"
 
@@ -179,14 +186,21 @@ class FasterWhisperBackend(TranscriptionBackend):
             download_root=str(self._models_dir),
         )
 
-    def _start_transcription(self, path: str, language: str | None):
+    def _start_transcription(
+        self, path: str, language: str | None, initial_prompt: str | None
+    ):
         """Prefetch the first segment so CUDA runtime failures (which surface
         on the first encode, not at model load) are raised here."""
-        fw_segments, info = self._model.transcribe(
-            path,
-            language=language,
-            vad_filter=True,
-        )
+        kwargs: dict = {
+            "language": language,
+            "vad_filter": True,
+            "initial_prompt": initial_prompt,
+        }
+        if self._strict_vad:
+            kwargs["vad_parameters"] = dict(min_silence_duration_ms=500, speech_pad_ms=200)
+            kwargs["no_speech_threshold"] = 0.5
+            kwargs["condition_on_previous_text"] = False
+        fw_segments, info = self._model.transcribe(path, **kwargs)
         seg_iter = iter(fw_segments)
         first = next(seg_iter, None)
         return info, first, seg_iter
@@ -195,12 +209,19 @@ class FasterWhisperBackend(TranscriptionBackend):
         self,
         path: str,
         language: str | None = "en",
+        initial_prompt: str | None = None,
     ) -> tuple[TranscriptionInfo, Iterator[Segment]]:
         if self._model is None:
             self.load()
 
+        # Call-site prompt takes precedence; fall back to the constructor-level
+        # hint. worker.py cannot pass per-job prompts (TranscriptionJob has no
+        # prompt field and worker.py is not modified), so the constructor path
+        # is the only route for GUI-configured hints.
+        effective_prompt = initial_prompt or self._initial_prompt
+
         try:
-            info, first, rest = self._start_transcription(path, language)
+            info, first, rest = self._start_transcription(path, language, effective_prompt)
         except RuntimeError as exc:
             if self._resolved_device != "cuda" or not _is_cuda_library_error(exc):
                 raise
@@ -208,7 +229,7 @@ class FasterWhisperBackend(TranscriptionBackend):
             self._model = None
             self._device_arg = "cpu"
             self.load()
-            info, first, rest = self._start_transcription(path, language)
+            info, first, rest = self._start_transcription(path, language, effective_prompt)
 
         ti = TranscriptionInfo(
             duration=info.duration,
@@ -236,5 +257,13 @@ def create_backend(
     model_size: str = "small",
     device: str = "auto",
     language: str | None = "en",
+    initial_prompt: str | None = None,
+    strict_vad: bool = False,
 ) -> TranscriptionBackend:
-    return FasterWhisperBackend(model_size=model_size, device=device, language=language)
+    return FasterWhisperBackend(
+        model_size=model_size,
+        device=device,
+        language=language,
+        initial_prompt=initial_prompt,
+        strict_vad=strict_vad,
+    )
