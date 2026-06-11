@@ -12,7 +12,7 @@ from ttkbootstrap.constants import DISABLED, END, HORIZONTAL, LEFT, NORMAL, RIGH
 from ttkbootstrap.widgets import ToolTip
 
 from config import AppConfig, load_config, save_config, setup_logging
-from engine import MODEL_SIZES, TranscriptionBackend, create_backend
+from engine import LANGUAGE_CHOICES, MODEL_SIZES, TranscriptionBackend, create_backend
 from worker import (
     FileResult,
     TranscriptionJob,
@@ -22,8 +22,6 @@ from worker import (
 from writers import FORMAT_WRITERS
 
 logger = logging.getLogger("transcriber")
-
-LANGUAGE_CHOICES: list[str] = ["en", "auto", "es", "fr", "de", "zh", "ja", "pt", "ru"]
 
 
 # ---------------------------------------------------------------------------
@@ -190,10 +188,9 @@ class TranscriberApp:
             row=2, column=2, padx=2, pady=(4, 0)
         )
         ToolTip(outdir_entry, text="Leave empty to write output alongside each source file.")
-        self._outdir_var.trace_add("write", lambda *_: (
-            setattr(self._cfg, "output_dir", self._outdir_var.get().strip() or None),
-            save_config(self._cfg),
-        ))
+        # FocusOut rather than a write-trace: a trace would rewrite the config
+        # file on every keystroke; _on_close still does the final sync.
+        outdir_entry.bind("<FocusOut>", self._on_outdir_change)
 
         ff = ttk.LabelFrame(outer, text="Output Formats")
         ff.grid(row=0, column=1, sticky="nsew", ipadx=4, ipady=4)
@@ -230,8 +227,8 @@ class TranscriberApp:
 
     def _ensure_backend(self) -> None:
         """(Re)create backend and worker if model/lang params changed."""
-        lang = self._lang_var.get() if hasattr(self, "_lang_var") else self._cfg.language
-        model = self._model_var.get() if hasattr(self, "_model_var") else self._cfg.model_size
+        lang = self._lang_var.get()
+        model = self._model_var.get()
 
         if (self._backend is not None
                 and model == self._backend_model
@@ -318,6 +315,7 @@ class TranscriberApp:
         d = filedialog.askdirectory(title="Select output directory")
         if d:
             self._outdir_var.set(d)
+            self._on_outdir_change()
 
     # ------------------------------------------------------------------
     # Transcription control
@@ -392,24 +390,27 @@ class TranscriberApp:
     # Settings change handlers
     # ------------------------------------------------------------------
 
-    def _on_model_change(self, _event: object = None) -> None:
-        self._cfg.model_size = self._model_var.get()
+    def _save_setting(self, attr: str, value: object) -> None:
+        setattr(self._cfg, attr, value)
         save_config(self._cfg)
+
+    def _on_model_change(self, _event: object = None) -> None:
         # Backend will be recreated lazily on next transcribe / explicit preload
+        self._save_setting("model_size", self._model_var.get())
 
     def _on_lang_change(self, _event: object = None) -> None:
-        self._cfg.language = self._lang_var.get()
-        save_config(self._cfg)
+        self._save_setting("language", self._lang_var.get())
 
     def _on_format_change(self) -> None:
-        self._cfg.formats = [f for f, v in self._fmt_vars.items() if v.get()]
-        save_config(self._cfg)
+        self._save_setting("formats", [f for f, v in self._fmt_vars.items() if v.get()])
+
+    def _on_outdir_change(self, _event: object = None) -> None:
+        self._save_setting("output_dir", self._outdir_var.get().strip() or None)
 
     def _toggle_theme(self) -> None:
         theme = "darkly" if self._dark_var.get() else "yeti"
         self._app.style.theme_use(theme)
-        self._cfg.theme = theme
-        save_config(self._cfg)
+        self._save_setting("theme", theme)
 
     # ------------------------------------------------------------------
     # Helpers
@@ -437,11 +438,9 @@ class TranscriberApp:
     def _on_close(self) -> None:
         if self._worker:
             self._worker.stop()
-        self._cfg.output_dir = self._outdir_var.get().strip() or None
-        self._cfg.model_size = self._model_var.get()
-        self._cfg.language = self._lang_var.get()
-        self._cfg.formats = [f for f, v in self._fmt_vars.items() if v.get()]
-        save_config(self._cfg)
+        # Other settings save eagerly in their change handlers; the entry may
+        # still hold an un-FocusOut'd edit, so sync it here.
+        self._save_setting("output_dir", self._outdir_var.get().strip() or None)
         self._app.destroy()
 
     def run(self) -> None:

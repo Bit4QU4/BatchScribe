@@ -28,6 +28,9 @@ MODEL_SIZES: tuple[str, ...] = (
 # Sizes that have a dedicated .en variant on HuggingFace
 _EN_VARIANT_SIZES: frozenset[str] = frozenset({"tiny", "base", "small", "medium"})
 
+# Languages offered in the UI; "auto" maps to None (model auto-detect).
+LANGUAGE_CHOICES: tuple[str, ...] = ("en", "auto", "es", "fr", "de", "zh", "ja", "pt", "ru")
+
 
 def default_models_dir() -> Path:
     """Return (and create) the platform-appropriate model cache directory."""
