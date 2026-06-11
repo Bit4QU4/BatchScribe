@@ -1,0 +1,36 @@
+# Gitleaks config: default secret rules plus PII patterns specific to this
+# project's risk profile (call recordings, personal contact info, local paths).
+# Scan history locally with: gitleaks git . ; staged changes: gitleaks protect --staged
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "us-phone-number"
+description = "US phone number (E.164 or dashed)"
+regex = '''(\+1[2-9]\d{9})|([2-9]\d{2}-\d{3}-\d{4})'''
+
+[[rules]]
+id = "call-recording-filename"
+description = "Call recording artifact (encodes caller phone number)"
+regex = '''CallRecord_[\d-]+_\+?\d+'''
+
+[[rules]]
+id = "personal-email"
+description = "Personal email address (non-noreply)"
+regex = '''[a-zA-Z0-9._%+-]+@(gmail\.com|pm\.me|protonmail\.com|outlook\.com|yahoo\.com|hotmail\.com)'''
+
+[[rules]]
+id = "windows-user-path"
+description = "Absolute Windows path leaking a username"
+# RE2 has no lookaheads; the generic placeholder is excused via the allowlist.
+regex = '''[Cc]:[/\\]+Users[/\\]+[A-Za-z0-9._-]+'''
+
+[allowlist]
+description = "Known-safe matches"
+regexes = [
+    # Generic placeholder username used in docs and scrubbed history
+    '''[Cc]:[/\\]+Users[/\\]+user\b''',
+    # GitHub noreply author email
+    '''users\.noreply\.github\.com''',
+]
