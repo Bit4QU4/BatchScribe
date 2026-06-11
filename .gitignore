@@ -38,5 +38,8 @@ tst1.md
 .claude/
 
 # Internal planning notes (kept local only)
+CLAUDE.md
+ARCHITECTURE.md
+CHANGELOG.md
 TODO.md
 TASKLIST.md

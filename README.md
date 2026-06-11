@@ -120,7 +120,7 @@ Records wall-clock time and realtime factor (audio_duration / wall_time). Exampl
 
 ## Architecture
 
-See `ARCHITECTURE.md` for the module layout, backend abstraction, and how to extend the engine.
+Flat module layout: `main.py` (GUI), `engine.py` (backend abstraction + faster-whisper implementation), `worker.py` (single background worker thread), `writers.py` (output format functions), `config.py` (settings + logging). New engines subclass `TranscriptionBackend` in `engine.py`; new output formats register in `FORMAT_WRITERS` in `writers.py`.
 
 ## License
 

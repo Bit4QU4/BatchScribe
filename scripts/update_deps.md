@@ -29,7 +29,7 @@ Follow this checklist to update and validate dependencies:
    - Update requirements.txt with new pinned versions
    - Update pyproject.toml [project] dependencies section with matching pins
 
-6. Update CHANGELOG.md with the new versions and any relevant changes
+6. Note the new versions and any relevant changes in the release notes
 
 7. Create a git tag for the release
    ```
