@@ -24,7 +24,7 @@
 - Ttkbootstrap GUI with Treeview file table
 - Dark/light theme toggle (persisted)
 - Model size + language + output dir + formats (txt/vtt/srt/md/json)
-- Config + logs in %LOCALAPPDATA%/TranscriptionHackery
+- Config + logs in %LOCALAPPDATA%/BatchScribe
 - PyInstaller one-dir packaging
 - Tests in tests/
 - Output format writers (all 5)

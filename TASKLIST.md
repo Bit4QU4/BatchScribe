@@ -1,4 +1,4 @@
-# TranscriptionHackery — Execution Tasklist
+# BatchScribe — Execution Tasklist
 Priorities: **performance first**, then looks, then
 long-term updatability.
 
@@ -44,14 +44,14 @@ Effort: S = <2h, M = half/full day, L = multi-day.
       first job doesn't stall.
 - [x] **Model management** (M, Med) — model-size dropdown (tiny→large-v3, default
       `small`/`distil-small.en` on GPU), use `.en` variants when language is English; store models
-      in `%LOCALAPPDATA%\TranscriptionHackery\models` (not the exe bundle, not git) with a
+      in `%LOCALAPPDATA%\BatchScribe\models` (not the exe bundle, not git) with a
       download-progress bar.
 - [ ] **Re-run benchmark, record results in README** (S, High).
 
 ## Phase 2 — Make it pretty (panels conflicted: polish ttkbootstrap vs. migrate to CustomTkinter — verdict: stay on ttkbootstrap; it's already in place, has 25+ themes incl. dark, and styles Treeview, which CustomTkinter lacks. Revisit only if the polish pass disappoints.)
 
 - [x] **File list → `ttk.Treeview` with per-file status** (M, High) — columns: name, duration,
-      status (⏳/▶/✓/✗), per-file progress. Replaces the ScrolledText dump. Right-click to remove.
+      status (pending/running/done/failed), per-file progress. Replaces the ScrolledText dump. Right-click to remove.
 - [x] **Kill all messagebox spam → inline status bar** (S, High) — no startup popup, no per-error
       modals; bottom status frame + batch summary when done ("12 ok, 2 failed — see log").
 - [x] **Consistent ttkbootstrap styling** (S, Med) — replace raw `tk.Checkbutton`s with

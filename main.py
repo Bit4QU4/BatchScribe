@@ -1,10 +1,8 @@
-"""GUI entry point for TranscriptionHackery."""
+"""GUI entry point for BatchScribe."""
 
 from __future__ import annotations
 
 import logging
-import shutil
-import sys
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog
@@ -46,18 +44,6 @@ def language_to_param(choice: str) -> str | None:
     return None if choice == "auto" else choice
 
 
-def find_ffmpeg() -> str | None:
-    """Return path to ffmpeg if found bundled or on PATH, else None."""
-    if getattr(sys, "frozen", False):
-        bundled = Path(sys._MEIPASS) / "ffmpeg.exe"  # type: ignore[attr-defined]
-        if bundled.exists():
-            return str(bundled)
-    local = Path(__file__).parent / "ffmpeg.exe"
-    if local.exists():
-        return str(local)
-    return shutil.which("ffmpeg")
-
-
 def build_jobs(
     paths: list[str],
     formats: list[str],
@@ -77,8 +63,7 @@ def build_jobs(
 class TranscriberApp:
     def __init__(self) -> None:
         self._cfg: AppConfig = load_config()
-        log_path = setup_logging()
-        self._log_path: Path = log_path
+        self._log_path: Path = setup_logging()
 
         try:
             self._app = ttk.Window(themename=self._cfg.theme)
@@ -87,7 +72,7 @@ class TranscriberApp:
             logger.warning("Unknown theme %r; falling back to darkly", self._cfg.theme)
             self._cfg.theme = "darkly"
             self._app = ttk.Window(themename="darkly")
-        self._app.title("AV Voice2Text")
+        self._app.title("BatchScribe")
         self._app.minsize(700, 480)
         self._app.resizable(True, True)
 
@@ -115,7 +100,7 @@ class TranscriberApp:
     def _build_ui(self) -> None:
         root = self._app
         root.columnconfigure(0, weight=1)
-        root.rowconfigure(1, weight=1)  # file table row grows
+        root.rowconfigure(1, weight=1)
 
         self._build_toolbar(root)
         self._build_file_table(root)
@@ -362,11 +347,7 @@ class TranscriberApp:
         self._set_running_state(running=True)
         self._worker.submit(jobs)
 
-        if not find_ffmpeg():
-            logger.warning("ffmpeg not found; PyAV handles decoding but some formats may fail")
-            self._set_status("Transcribing... (note: ffmpeg not found; PyAV handles decoding)")
-        else:
-            self._set_status("Transcribing...")
+        self._set_status("Transcribing...")
 
     def _stop(self) -> None:
         if self._worker:
