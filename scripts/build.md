@@ -30,4 +30,4 @@
 ## Notes
 
 - **Models directory**: Whisper models download on first run to `%LOCALAPPDATA%\TranscriptionHackery\models` and are cached there for subsequent runs.
-- **FFmpeg**: Optional. If `ffmpeg.exe` is present in the build directory at build time, it will be bundled in the output directory. Otherwise, faster-whisper uses PyAV for decoding (included in dependencies).
+- **FFmpeg**: Not required. Decoding is handled by PyAV (included in dependencies); no external `ffmpeg.exe` is bundled or used.

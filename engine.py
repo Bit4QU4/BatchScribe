@@ -134,7 +134,7 @@ class FasterWhisperBackend(TranscriptionBackend):
         self._models_dir = models_dir or default_models_dir()
         self._language = language
         self._model = None
-        self._resolved_device: str = "cpu"  # filled in by load()
+        self._resolved_device: str = "cpu"
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -163,7 +163,7 @@ class FasterWhisperBackend(TranscriptionBackend):
     def load(self) -> None:
         if self._model is not None:
             return
-        from faster_whisper import WhisperModel  # lazy import
+        from faster_whisper import WhisperModel
 
         self._resolved_device = self._resolve_device()
         if self._resolved_device == "cuda":

@@ -108,7 +108,7 @@ pyinstaller main.spec
 
 Output: `dist/TranscriptionHackery/` (ready to zip and distribute).
 
-Optional: include `ffmpeg.exe` in the build directory; it will be bundled. Otherwise, faster-whisper uses PyAV for fallback decoding.
+No external ffmpeg is needed: audio/video decoding is handled by PyAV, which is included in the dependencies.
 
 ## Benchmarking
 
@@ -124,4 +124,4 @@ See `ARCHITECTURE.md` for the module layout, backend abstraction, and how to ext
 
 ## License
 
-See LICENSE (if present).
+This project is licensed under the MIT License. See the LICENSE file for details.

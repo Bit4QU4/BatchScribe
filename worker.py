@@ -42,7 +42,6 @@ class WorkerCallbacks:
     on_status: Callable[[str], None] | None = None
 
 
-# Sentinel objects for the internal task queue
 @dataclass
 class _Batch:
     jobs: list[TranscriptionJob]

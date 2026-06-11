@@ -16,7 +16,6 @@ The codebase is flat (no packages). All modules import directly from the repo ro
 Pure helper functions (tested in `tests/test_app_logic.py`):
 - `format_elapsed()` - seconds to "Xm Ys" string
 - `language_to_param()` - UI choice to engine param (None = auto-detect)
-- `find_ffmpeg()` - locate ffmpeg bundled or on PATH
 - `build_jobs()` - construct TranscriptionJob list from UI selections
 
 ### engine.py - Transcription abstraction (no tkinter, no torch)

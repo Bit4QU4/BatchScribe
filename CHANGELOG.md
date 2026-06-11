@@ -4,7 +4,7 @@ All notable changes to this project are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
-## 0.2.0 - Unreleased
+## 0.2.0 - 2026-06-11
 
 ### Changed
 
@@ -24,12 +24,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - Tests in tests/ (pure functions in test_app_logic.py; integration in test_smoke.py with stub backend).
 - CI skeleton in .github/workflows.
 - ARCHITECTURE.md, CLAUDE.md, this CHANGELOG.md.
+- MIT license.
 
 ### Removed
 
 - Dead code: install_cuda_drivers(), openai-whisper dependency, old torch + CUDA 11.7 instructions.
 - ThreadPoolExecutor and Max Workers slider (single worker is better).
 - Splash screen messagebox (blocks startup; moved to background preload).
+- Bundled ffmpeg.exe and the find_ffmpeg() helper: PyAV (shipped with faster-whisper deps) handles all decoding, and we do not redistribute a standalone FFmpeg binary.
 
 ### Fixed
 

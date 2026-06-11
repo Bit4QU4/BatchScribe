@@ -62,7 +62,6 @@ def load_config() -> AppConfig:
 def save_config(cfg: AppConfig) -> None:
     target = config_dir() / _CONFIG_FILE
     data = json.dumps(asdict(cfg), ensure_ascii=False, indent=2)
-    # Atomic write: write to sibling tmp then rename
     fd, tmp_path = tempfile.mkstemp(dir=target.parent, suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:

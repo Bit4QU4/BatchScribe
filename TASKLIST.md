@@ -51,7 +51,7 @@ Effort: S = <2h, M = half/full day, L = multi-day.
 ## Phase 2 — Make it pretty (panels conflicted: polish ttkbootstrap vs. migrate to CustomTkinter — verdict: stay on ttkbootstrap; it's already in place, has 25+ themes incl. dark, and styles Treeview, which CustomTkinter lacks. Revisit only if the polish pass disappoints.)
 
 - [x] **File list → `ttk.Treeview` with per-file status** (M, High) — columns: name, duration,
-      status (⏳/▶/✓/✗), per-file progress. Replaces the ScrolledText dump. Right-click to remove.
+      status (pending/running/done/failed), per-file progress. Replaces the ScrolledText dump. Right-click to remove.
 - [x] **Kill all messagebox spam → inline status bar** (S, High) — no startup popup, no per-error
       modals; bottom status frame + batch summary when done ("12 ok, 2 failed — see log").
 - [x] **Consistent ttkbootstrap styling** (S, Med) — replace raw `tk.Checkbutton`s with
