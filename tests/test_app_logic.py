@@ -59,3 +59,19 @@ def test_build_jobs_with_output_dir():
 def test_build_jobs_empty_outdir_becomes_none():
     jobs = build_jobs(["/a/b.mp3"], ["txt"], "", "en")
     assert jobs[0].output_dir is None
+
+
+def test_filter_media_paths(tmp_path):
+    keep = tmp_path / "a.mp3"
+    keep.write_bytes(b"x")
+    wrong_ext = tmp_path / "notes.txt"
+    wrong_ext.write_bytes(b"x")
+    folder = tmp_path / "folder.mp3"  # extension-named directory must be dropped
+    folder.mkdir()
+    missing = tmp_path / "ghost.wav"
+    upper = tmp_path / "B.MP4"
+    upper.write_bytes(b"x")
+
+    from main import filter_media_paths
+    got = filter_media_paths([str(keep), str(wrong_ext), str(folder), str(missing), str(upper)])
+    assert got == [str(keep), str(upper)]

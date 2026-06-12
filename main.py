@@ -30,6 +30,11 @@ from writers import FORMAT_WRITERS
 
 logger = logging.getLogger("transcriber")
 
+MEDIA_EXTENSIONS: tuple[str, ...] = (
+    ".mp4", ".avi", ".mov", ".flv", ".wmv",
+    ".mp3", ".wav", ".aac", ".flac", ".ogg", ".m4a",
+)
+
 _FORMAT_TOOLTIPS: dict[str, str] = {
     "txt": "Plain text, no timestamps.",
     "md": "Markdown with bold timestamp headers.",
@@ -66,6 +71,15 @@ def build_jobs(
     return [
         TranscriptionJob(path=p, formats=formats, output_dir=output_dir or None, language=language)
         for p in paths
+    ]
+
+
+def filter_media_paths(paths) -> list[str]:
+    """Keep only existing files with a known media extension (for drag-drop,
+    which can deliver folders and arbitrary file types)."""
+    return [
+        p for p in paths
+        if Path(p).suffix.lower() in MEDIA_EXTENSIONS and Path(p).is_file()
     ]
 
 
@@ -154,6 +168,43 @@ class TranscriberApp:
         self._build_settings(root)
         self._build_progress(root)
         self._build_statusbar(root)
+        self._enable_dnd()
+        self._bind_shortcuts()
+
+    def _bind_shortcuts(self) -> None:
+        """Keyboard operation of the full workflow.
+
+        Handlers re-check running state because key bindings bypass the
+        disabled state of the toolbar buttons.
+        """
+        root = self._app
+        root.bind("<Control-o>", lambda _e: self._running or self._add_files())
+        root.bind("<Control-Return>", lambda _e: self._running or self._start_transcribe())
+        root.bind("<Escape>", lambda _e: self._stop() if self._running else None)
+        # Plain Delete/BackSpace stay scoped to the file table so text entries
+        # keep their editing keys.
+        self._tree.bind("<Delete>", lambda _e: self._running or self._remove_selected())
+        self._tree.bind("<BackSpace>", lambda _e: self._running or self._remove_selected())
+
+    def _enable_dnd(self) -> None:
+        """Register the whole window as a file drop target.
+
+        tkinterdnd2 ships a platform-specific tkdnd binary; treat any failure
+        (missing wheel, unsupported platform, broken bundle) as 'no drag-drop'
+        rather than a startup error.
+        """
+        try:
+            from tkinterdnd2 import DND_FILES, TkinterDnD
+
+            # ttk.Window is a plain Tk subclass; graft the DnD mixin onto the
+            # live instance so the mixin's internal self._dnd_* helpers resolve.
+            base = self._app.__class__
+            self._app.__class__ = type("_DnDWindow", (base, TkinterDnD.DnDWrapper), {})
+            self._app.TkdndVersion = TkinterDnD._require(self._app)
+            self._app.drop_target_register(DND_FILES)
+            self._app.dnd_bind("<<Drop>>", self._on_drop)
+        except Exception as exc:
+            logger.info("Drag-and-drop unavailable: %s", exc)
 
     def _build_toolbar(self, parent: tk.Widget) -> None:
         bar = ttk.Frame(parent)
@@ -161,11 +212,11 @@ class TranscriberApp:
 
         self._btn_add = ttk.Button(bar, text="Add Files", command=self._add_files)
         self._btn_add.pack(side=LEFT, padx=2)
-        ToolTip(self._btn_add, text="Pick audio/video files to add to the queue.")
+        ToolTip(self._btn_add, text="Pick audio/video files to add to the queue (Ctrl+O).")
 
         self._btn_remove = ttk.Button(bar, text="Remove Selected", command=self._remove_selected)
         self._btn_remove.pack(side=LEFT, padx=2)
-        ToolTip(self._btn_remove, text="Remove the highlighted files from the queue.")
+        ToolTip(self._btn_remove, text="Remove the highlighted files from the queue (Delete).")
 
         self._btn_clear = ttk.Button(bar, text="Clear", command=self._clear_files)
         self._btn_clear.pack(side=LEFT, padx=2)
@@ -176,13 +227,14 @@ class TranscriberApp:
         )
         self._btn_transcribe.pack(side=LEFT, padx=(12, 2))
         ToolTip(self._btn_transcribe,
-                text="Transcribe every queued file with the current settings.")
+                text="Transcribe every queued file with the current settings (Ctrl+Enter).")
 
         self._btn_stop = ttk.Button(
             bar, text="Stop", bootstyle="danger", command=self._stop, state=DISABLED
         )
         self._btn_stop.pack(side=LEFT, padx=2)
-        ToolTip(self._btn_stop, text="Stop after the current segment; finished files are kept.")
+        ToolTip(self._btn_stop,
+                text="Stop after the current segment; finished files are kept (Esc).")
 
         self._dark_var = tk.BooleanVar(value=self._cfg.theme == "darkly")
         cb_theme = ttk.Checkbutton(
@@ -408,13 +460,13 @@ class TranscriberApp:
         paths = filedialog.askopenfilenames(
             title="Select audio/video files",
             filetypes=[
-                (
-                    "Media files",
-                    "*.mp4 *.avi *.mov *.flv *.wmv *.mp3 *.wav *.aac *.flac *.ogg *.m4a",
-                ),
+                ("Media files", " ".join(f"*{ext}" for ext in MEDIA_EXTENSIONS)),
                 ("All files", "*.*"),
             ],
         )
+        self._add_paths(paths)
+
+    def _add_paths(self, paths) -> None:
         existing = set(self._file_paths)
         added = 0
         for p in paths:
@@ -425,6 +477,11 @@ class TranscriberApp:
                 added += 1
         if added:
             self._set_status(f"Added {added} file(s). {len(self._file_paths)} total.")
+
+    def _on_drop(self, event: object) -> None:
+        # tkdnd wraps paths containing spaces in braces; splitlist undoes that.
+        raw = self._app.tk.splitlist(event.data)  # type: ignore[attr-defined]
+        self._add_paths(filter_media_paths(raw))
 
     def _remove_selected(self) -> None:
         for iid in self._tree.selection():
