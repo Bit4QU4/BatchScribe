@@ -23,7 +23,7 @@ def _version() -> str:
         return version("batchscribe")
     except PackageNotFoundError:
         # Running from a source checkout rather than an installed package.
-        return "0.2.0"
+        return "0.3.0"
 
 
 def main(argv: list[str] | None = None) -> int:
