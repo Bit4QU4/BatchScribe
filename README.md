@@ -1,8 +1,17 @@
 # BatchScribe
 
-A fast, single-threaded batch transcription GUI using faster-whisper (CTranslate2).
+**Free, fully-local batch transcription for Windows — no cloud accounts, subscriptions, or setup friction.**
 
-Transcribe audio and video files to text in multiple formats (txt, vtt, srt, md, json) with a simple Tkinter UI. Supports GPU acceleration (NVIDIA CUDA 12 + cuDNN 9) or CPU-only operation.
+Drop a pile of audio or video files into the queue, walk away, and come back to transcripts in txt, srt, vtt, md, or json. Powered by faster-whisper (CTranslate2) with GPU acceleration (NVIDIA CUDA 12 + cuDNN 9) or CPU-only operation.
+
+![BatchScribe main window](assets/screenshot.png)
+
+## Why BatchScribe
+
+- **Batch-first**: a real file queue with per-file status and progress — built for the 50-file backlog, not the single clip.
+- **Fully local**: audio never leaves your machine (see Privacy below). No account, no API key, no upload.
+- **Fast**: CTranslate2 inference is 2-4x faster than openai-whisper, with VAD silence skipping on top, and no 2GB torch install.
+- **Free and MIT-licensed**, on a stack built for years of low-touch maintenance.
 
 ## Quick Start
 

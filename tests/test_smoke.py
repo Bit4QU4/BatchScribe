@@ -199,8 +199,8 @@ def test_worker_submit_and_batch_done(tmp_path: Path):
 
     done_event = threading.Event()
 
-    def _on_batch_done(ok, fail, elapsed):
-        batch_done.append((ok, fail, elapsed))
+    def _on_batch_done(ok, fail, elapsed, summary_path):
+        batch_done.append((ok, fail, elapsed, summary_path))
         done_event.set()
 
     cbs = WorkerCallbacks(
@@ -228,7 +228,7 @@ def test_worker_submit_and_batch_done(tmp_path: Path):
     assert done_event.wait(timeout=10), "batch_done callback never fired"
 
     assert len(batch_done) == 1
-    ok, fail, elapsed = batch_done[0]
+    ok, fail, elapsed, summary_path = batch_done[0]
     assert ok == 1
     assert fail == 0
     assert elapsed >= 0
@@ -244,7 +244,7 @@ def test_worker_stop_mid_batch(tmp_path: Path):
     results: list[FileResult] = []
     done_event = threading.Event()
 
-    def _on_batch_done(ok, fail, elapsed):
+    def _on_batch_done(ok, fail, elapsed, summary_path):
         done_event.set()
 
     cbs = WorkerCallbacks(
@@ -372,6 +372,186 @@ def test_setup_logging_idempotent(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
+# Batch summary tests
+# ---------------------------------------------------------------------------
+
+class _FailOnceBackend(_StubBackend):
+    """Raises on the first transcribe call; succeeds thereafter."""
+
+    def __init__(self, segments, duration=10.0):
+        super().__init__(segments, duration)
+        self._call_count = 0
+
+    def transcribe(self, path, language=None):
+        self._call_count += 1
+        if self._call_count == 1:
+            raise RuntimeError("Simulated transcription failure")
+        return super().transcribe(path, language)
+
+
+def _run_batch_sync(backend, jobs) -> tuple:
+    """Run a batch synchronously; return (ok, fail, elapsed, summary_path, results)."""
+    batch_done: list[tuple] = []
+    results: list[FileResult] = []
+    done_event = threading.Event()
+
+    def _on_batch_done(ok, fail, elapsed, summary_path):
+        batch_done.append((ok, fail, elapsed, summary_path))
+        done_event.set()
+
+    cbs = WorkerCallbacks(
+        on_file_done=lambda r: results.append(r),
+        on_batch_done=_on_batch_done,
+    )
+    worker = TranscriptionWorker(
+        backend=backend,
+        dispatch=lambda fn: fn(),
+        callbacks=cbs,
+    )
+    worker.submit(jobs)
+    done_event.wait(timeout=10)
+    ok, fail, elapsed, summary_path = batch_done[0]
+    return ok, fail, elapsed, summary_path, results
+
+
+def test_batch_summary_two_ok_one_failed(tmp_path: Path):
+    """2 ok + 1 failed writes a summary with correct header counts and per-file lines."""
+    backend = _FailOnceBackend(FAKE_SEGMENTS, duration=10.0)
+
+    jobs = []
+    for name in ("alpha.mp3", "beta.mp3", "gamma.mp3"):
+        f = tmp_path / name
+        f.write_bytes(b"\x00" * 8)
+        jobs.append(TranscriptionJob(
+            path=str(f), formats=["txt"], output_dir=str(tmp_path), language="en"
+        ))
+
+    ok, fail, elapsed, summary_path, results = _run_batch_sync(backend, jobs)
+
+    assert ok == 2
+    assert fail == 1
+    assert summary_path is not None
+
+    text = Path(summary_path).read_text(encoding="utf-8")
+    assert "2 ok" in text
+    assert "1 failed" in text
+
+    # One tab-delimited data line per attempted file
+    data_lines = [ln for ln in text.splitlines() if "\t" in ln]
+    assert len(data_lines) == 3
+
+    # Basenames only — no directory separators in the filename field
+    for ln in data_lines:
+        name_field = ln.split("\t")[0]
+        assert "/" not in name_field and "\\" not in name_field
+
+    # RTF present for ok files; failed line present
+    ok_lines = [ln for ln in data_lines if "\tOK\t" in ln]
+    assert all("rtf=" in ln for ln in ok_lines)
+    failed_lines = [ln for ln in data_lines if "\tFAILED\t" in ln]
+    assert len(failed_lines) == 1
+
+    # RTF direction: duration / wall time. The stub transcribes 10s of audio in
+    # milliseconds, so the factor must be far above 1x (the inverse would be ~0).
+    for ln in ok_lines:
+        rtf_value = float(ln.rsplit("rtf=", 1)[1].rstrip("x"))
+        assert rtf_value > 1.0
+
+
+def test_batch_summary_cancelled_line(tmp_path: Path):
+    """A file cancelled mid-segment appears as CANCELLED in the summary."""
+    backend = _StubBackend(FAKE_SEGMENTS, duration=5.0)
+    batch_done: list[tuple] = []
+    results: list[FileResult] = []
+    done_event = threading.Event()
+
+    def _on_batch_done(ok, fail, elapsed, summary_path):
+        batch_done.append((ok, fail, elapsed, summary_path))
+        done_event.set()
+
+    cbs = WorkerCallbacks(
+        on_file_done=lambda r: results.append(r),
+        on_batch_done=_on_batch_done,
+    )
+
+    jobs = []
+    for i in range(3):
+        f = tmp_path / f"c{i}.mp3"
+        f.write_bytes(b"\x00" * 8)
+        jobs.append(TranscriptionJob(
+            path=str(f), formats=["txt"], output_dir=str(tmp_path), language="en"
+        ))
+
+    worker = TranscriptionWorker(
+        backend=backend, dispatch=lambda fn: fn(), callbacks=cbs
+    )
+    worker.submit(jobs)
+    time.sleep(0.05)
+    worker.stop()
+    done_event.wait(timeout=10)
+
+    _, _, _, summary_path = batch_done[0]
+    # Summary is written for any attempted files; cancelled lines use CANCELLED status
+    if summary_path is not None:
+        text = Path(summary_path).read_text(encoding="utf-8")
+        cancelled_lines = [ln for ln in text.splitlines() if "\tCANCELLED\t" in ln]
+        ok_or_fail = [ln for ln in text.splitlines() if "\tOK\t" in ln or "\tFAILED\t" in ln]
+        # Every data line is one of OK/FAILED/CANCELLED
+        data_lines = [ln for ln in text.splitlines() if "\t" in ln]
+        assert len(cancelled_lines) + len(ok_or_fail) == len(data_lines)
+
+
+def test_batch_summary_write_failure_does_not_raise(tmp_path: Path, monkeypatch):
+    """An I/O failure writing the summary must not propagate out of the worker."""
+    backend = _StubBackend(FAKE_SEGMENTS, duration=10.0)
+
+    fake = tmp_path / "x.mp3"
+    fake.write_bytes(b"\x00" * 8)
+    job = TranscriptionJob(
+        path=str(fake), formats=["txt"], output_dir=str(tmp_path), language="en"
+    )
+
+    original_write_text = Path.write_text
+
+    def _failing_write_text(self, *args, **kwargs):
+        if self.name == "_batch_summary.txt":
+            raise OSError("disk full")
+        return original_write_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", _failing_write_text)
+
+    ok, fail, elapsed, summary_path, results = _run_batch_sync(backend, [job])
+
+    assert ok == 1
+    assert fail == 0
+    # A write failure must yield None, not raise
+    assert summary_path is None
+
+
+def test_batch_summary_basenames_only(tmp_path: Path):
+    """Summary file lines must contain only the filename, not any directory path."""
+    nested = tmp_path / "deep" / "subdir"
+    nested.mkdir(parents=True)
+    fake = nested / "recording.mp3"
+    fake.write_bytes(b"\x00" * 8)
+
+    backend = _StubBackend(FAKE_SEGMENTS, duration=8.0)
+    job = TranscriptionJob(
+        path=str(fake), formats=["txt"], output_dir=str(tmp_path), language="en"
+    )
+
+    ok, fail, elapsed, summary_path, results = _run_batch_sync(backend, [job])
+
+    assert summary_path is not None
+    text = Path(summary_path).read_text(encoding="utf-8")
+    data_lines = [ln for ln in text.splitlines() if "\t" in ln]
+    assert len(data_lines) == 1
+    name_field = data_lines[0].split("\t")[0]
+    assert name_field == "recording.mp3"
+    assert str(nested) not in name_field
+
+
+# ---------------------------------------------------------------------------
 # Direct-run entry point (also runnable via pytest)
 # ---------------------------------------------------------------------------
 
@@ -400,6 +580,9 @@ if __name__ == "__main__":
         test_save_and_load_config,
         test_load_config_corrupt_returns_defaults,
         test_setup_logging_idempotent,
+        test_batch_summary_two_ok_one_failed,
+        test_batch_summary_cancelled_line,
+        test_batch_summary_basenames_only,
     ]
 
     passed = failed = 0

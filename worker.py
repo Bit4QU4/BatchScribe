@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import logging
 import queue
 import threading
@@ -31,6 +32,8 @@ class FileResult:
     ok: bool
     message: str
     elapsed: float
+    # Media duration in seconds; 0.0 when the engine did not report it
+    duration: float = 0.0
 
 
 @dataclass
@@ -38,7 +41,8 @@ class WorkerCallbacks:
     on_file_start: Callable[[str], None] | None = None
     on_segment_progress: Callable[[str, float], None] | None = None
     on_file_done: Callable[[FileResult], None] | None = None
-    on_batch_done: Callable[[int, int, float], None] | None = None
+    # summary_path is the path written by the worker, or None if writing failed
+    on_batch_done: Callable[[int, int, float, str | None], None] | None = None
     on_status: Callable[[str], None] | None = None
 
 
@@ -142,6 +146,8 @@ class TranscriptionWorker:
             batch_start = time.monotonic()
             ok_count = 0
             fail_count = 0
+            results: list[FileResult] = []
+            first_job = task.jobs[0] if task.jobs else None
 
             try:
                 if not self._backend.is_loaded:
@@ -154,6 +160,7 @@ class TranscriptionWorker:
                         self._cb(lambda: self._fire_status("Stopped."))
                         break
                     result = self._process_file(job)
+                    results.append(result)
                     if result.ok:
                         ok_count += 1
                     else:
@@ -166,9 +173,14 @@ class TranscriptionWorker:
                     self._busy = False
 
             elapsed = time.monotonic() - batch_start
+            summary_path = self._write_batch_summary(
+                results, ok_count, fail_count, elapsed, first_job
+            )
             self._cb(
-                lambda o=ok_count, f=fail_count, e=elapsed: self._callbacks.on_batch_done
-                and self._callbacks.on_batch_done(o, f, e)
+                lambda o=ok_count, f=fail_count, e=elapsed, sp=summary_path: (
+                    self._callbacks.on_batch_done
+                    and self._callbacks.on_batch_done(o, f, e, sp)
+                )
             )
 
     def _process_file(self, job: TranscriptionJob) -> FileResult:
@@ -177,8 +189,10 @@ class TranscriptionWorker:
         self._cb(lambda: self._fire_status(f"Transcribing: {Path(path).name}"))
 
         t0 = time.monotonic()
+        media_duration = 0.0
         try:
             info, seg_iter = self._backend.transcribe(path, language=job.language)
+            media_duration = info.duration or 0.0
 
             segments: list = []
             for seg in seg_iter:
@@ -195,7 +209,11 @@ class TranscriptionWorker:
 
             if self._stop_event.is_set():
                 result = FileResult(
-                    path=path, ok=False, message="Cancelled.", elapsed=time.monotonic() - t0
+                    path=path,
+                    ok=False,
+                    message="Cancelled.",
+                    elapsed=time.monotonic() - t0,
+                    duration=media_duration,
                 )
                 self._cb(
                     lambda r=result: self._callbacks.on_file_done
@@ -215,7 +233,9 @@ class TranscriptionWorker:
                 writer(segments, out_dir / f"{stem}.{fmt}")
 
             elapsed = time.monotonic() - t0
-            result = FileResult(path=path, ok=True, message="OK", elapsed=elapsed)
+            result = FileResult(
+                path=path, ok=True, message="OK", elapsed=elapsed, duration=media_duration
+            )
             # Logs record the basename only: full paths of recordings are
             # sensitive metadata and the log file outlives the session.
             logger.info("Done %s in %.1fs", Path(path).name, elapsed)
@@ -223,10 +243,75 @@ class TranscriptionWorker:
         except Exception as exc:
             elapsed = time.monotonic() - t0
             logger.exception("Failed to transcribe %s", Path(path).name)
-            result = FileResult(path=path, ok=False, message=str(exc), elapsed=elapsed)
+            result = FileResult(
+                path=path, ok=False, message=str(exc), elapsed=elapsed, duration=media_duration
+            )
 
         self._cb(lambda r=result: self._callbacks.on_file_done and self._callbacks.on_file_done(r))
         return result
+
+    def _write_batch_summary(
+        self,
+        results: list[FileResult],
+        ok_count: int,
+        fail_count: int,
+        elapsed: float,
+        first_job: TranscriptionJob | None,
+    ) -> str | None:
+        """Write _batch_summary.txt to the batch output dir; return path or None on failure.
+
+        Best-effort: any I/O error is logged as a warning and None is returned so the
+        caller does not treat a summary failure as a batch failure.
+        """
+        if not results:
+            return None
+
+        # Determine output directory: prefer job.output_dir; fall back to parent of first file.
+        if first_job and first_job.output_dir:
+            out_dir = Path(first_job.output_dir)
+        else:
+            out_dir = Path(results[0].path).parent
+
+        # _loop counts cancellations as failures; split them back out so the
+        # header's three buckets are disjoint.
+        cancelled_count = sum(1 for r in results if "Cancelled" in r.message)
+        failed_count = fail_count - cancelled_count
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        lines: list[str] = [
+            f"BatchScribe summary — {now}",
+            f"Total: {ok_count} ok, {failed_count} failed, {cancelled_count} cancelled"
+            f", elapsed {elapsed:.1f}s",
+            "",
+        ]
+        for r in results:
+            if "Cancelled" in r.message:
+                status = "CANCELLED"
+            elif r.ok:
+                status = "OK"
+            else:
+                status = "FAILED"
+
+            # Realtime factor = audio duration / wall time (2.0x means twice
+            # as fast as playback), matching README and benchmark.py.
+            rtf = (
+                f"{r.duration / r.elapsed:.2f}x"
+                if r.duration > 0 and r.elapsed > 0
+                else "n/a"
+            )
+            lines.append(
+                f"{Path(r.path).name}\t{status}\t{r.elapsed:.1f}s\trtf={rtf}"
+            )
+
+        summary_path = out_dir / "_batch_summary.txt"
+        try:
+            out_dir.mkdir(parents=True, exist_ok=True)
+            summary_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            logger.info("Batch summary written: %s", summary_path.name)
+        except Exception:
+            logger.warning("Could not write batch summary to %s", summary_path)
+            return None
+        return str(summary_path)
 
     def _fire_status(self, text: str) -> None:
         if self._callbacks.on_status:

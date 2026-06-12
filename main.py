@@ -23,6 +23,14 @@ from writers import FORMAT_WRITERS
 
 logger = logging.getLogger("transcriber")
 
+_FORMAT_TOOLTIPS: dict[str, str] = {
+    "txt": "Plain text, no timestamps.",
+    "md": "Markdown with bold timestamp headers.",
+    "json": "Structured segments with start/end times, for scripts and tools.",
+    "vtt": "WebVTT subtitles, for web video players.",
+    "srt": "SubRip subtitles, the most widely supported caption format.",
+}
+
 
 # ---------------------------------------------------------------------------
 # Pure helpers (no GUI) — tested in tests/test_app_logic.py
@@ -114,22 +122,28 @@ class TranscriberApp:
 
         self._btn_add = ttk.Button(bar, text="Add Files", command=self._add_files)
         self._btn_add.pack(side=LEFT, padx=2)
+        ToolTip(self._btn_add, text="Pick audio/video files to add to the queue.")
 
         self._btn_remove = ttk.Button(bar, text="Remove Selected", command=self._remove_selected)
         self._btn_remove.pack(side=LEFT, padx=2)
+        ToolTip(self._btn_remove, text="Remove the highlighted files from the queue.")
 
         self._btn_clear = ttk.Button(bar, text="Clear", command=self._clear_files)
         self._btn_clear.pack(side=LEFT, padx=2)
+        ToolTip(self._btn_clear, text="Empty the queue. Files on disk are not touched.")
 
         self._btn_transcribe = ttk.Button(
             bar, text="Transcribe", bootstyle="success", command=self._start_transcribe
         )
         self._btn_transcribe.pack(side=LEFT, padx=(12, 2))
+        ToolTip(self._btn_transcribe,
+                text="Transcribe every queued file with the current settings.")
 
         self._btn_stop = ttk.Button(
             bar, text="Stop", bootstyle="danger", command=self._stop, state=DISABLED
         )
         self._btn_stop.pack(side=LEFT, padx=2)
+        ToolTip(self._btn_stop, text="Stop after the current segment; finished files are kept.")
 
         self._dark_var = tk.BooleanVar(value=self._cfg.theme == "darkly")
         cb_theme = ttk.Checkbutton(
@@ -137,6 +151,7 @@ class TranscriberApp:
             command=self._toggle_theme,
         )
         cb_theme.pack(side=RIGHT, padx=4)
+        ToolTip(cb_theme, text="Switch between dark and light themes; remembered between runs.")
 
     def _build_file_table(self, parent: tk.Widget) -> None:
         frame = ttk.Frame(parent)
@@ -194,17 +209,20 @@ class TranscriberApp:
         # file on every keystroke; _on_close still does the final sync.
         outdir_entry.bind("<FocusOut>", self._on_outdir_change)
 
-        ttk.Label(sf, text="Vocabulary hint:").grid(row=3, column=0, sticky="w", pady=(4, 0))
+        prompt_label = ttk.Label(sf, text="Vocabulary hint:")
+        prompt_label.grid(row=3, column=0, sticky="w", pady=(4, 0))
         self._prompt_var = tk.StringVar(value=self._cfg.initial_prompt)
         prompt_entry = ttk.Entry(sf, textvariable=self._prompt_var, width=24)
         prompt_entry.grid(row=3, column=1, columnspan=2, sticky="ew", padx=4, pady=(4, 0))
-        ToolTip(
-            prompt_entry,
-            text=(
-                "Optional text that biases recognition toward specific names or terms. "
-                "Useful for unusual proper nouns, acronyms, or domain vocabulary."
-            ),
+        prompt_help = (
+            "Words or names the audio is likely to contain, so recognition is "
+            "biased toward them. Example: 'Dr. Okafor, RNA-seq, Kubernetes'. "
+            "Leave empty for general audio."
         )
+        # Same tip on label and entry: hovering the label is how people explore
+        # an unfamiliar field.
+        ToolTip(prompt_label, text=prompt_help)
+        ToolTip(prompt_entry, text=prompt_help)
         prompt_entry.bind("<FocusOut>", self._on_prompt_change)
 
         self._strict_vad_var = tk.BooleanVar(value=self._cfg.strict_vad)
@@ -225,6 +243,7 @@ class TranscriberApp:
 
         ff = ttk.LabelFrame(outer, text="Output Formats")
         ff.grid(row=0, column=1, sticky="nsew", ipadx=4, ipady=4)
+        ToolTip(ff, text="Each checked format writes one file per transcribed input.")
 
         self._fmt_vars: dict[str, tk.BooleanVar] = {}
         for i, fmt in enumerate(FORMAT_WRITERS.keys()):
@@ -233,6 +252,9 @@ class TranscriberApp:
             cb = ttk.Checkbutton(ff, text=fmt.upper(), variable=var,
                                  command=self._on_format_change)
             cb.grid(row=i // 3, column=i % 3, sticky="w", padx=6)
+            tip = _FORMAT_TOOLTIPS.get(fmt)
+            if tip:
+                ToolTip(cb, text=tip)
 
     def _build_progress(self, parent: tk.Widget) -> None:
         self._progress = ttk.Progressbar(parent, orient=HORIZONTAL, mode="determinate",
@@ -413,7 +435,7 @@ class TranscriberApp:
             self._tree_set(result.path, status="Failed", progress="")
             logger.error("Failed %s: %s", Path(result.path).name, result.message)
 
-    def _on_batch_done(self, ok: int, fail: int, elapsed: float) -> None:
+    def _on_batch_done(self, ok: int, fail: int, elapsed: float, summary_path: str | None) -> None:
         self._running = False
         self._set_running_state(running=False)
         for iid in self._tree.get_children():
@@ -422,6 +444,8 @@ class TranscriberApp:
         summary = (
             f"Done: {ok} ok, {fail} failed in {format_elapsed(elapsed)} (log: {self._log_path})"
         )
+        if summary_path:
+            summary = f"{summary} - summary: {Path(summary_path).name}"
         self._set_status(summary)
         self._progress["value"] = 100 if fail == 0 and ok > 0 else self._progress["value"]
 

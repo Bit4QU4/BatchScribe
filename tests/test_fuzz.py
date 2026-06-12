@@ -280,7 +280,7 @@ def test_worker_shutdown_exits_thread_and_silences_callbacks(tmp_path: Path):
     fired: list[str] = []
     cbs = WorkerCallbacks(
         on_status=lambda t: fired.append(t),
-        on_batch_done=lambda o, f, e: fired.append("batch"),
+        on_batch_done=lambda o, f, e, sp: fired.append("batch"),
     )
     worker = TranscriptionWorker(
         backend=_InstantBackend(), dispatch=lambda fn: fn(), callbacks=cbs
@@ -307,7 +307,7 @@ def test_worker_shutdown_cancels_in_flight_batch(tmp_path: Path):
 
     fired: list[str] = []
     cbs = WorkerCallbacks(
-        on_batch_done=lambda o, f, e: fired.append("batch"),
+        on_batch_done=lambda o, f, e, sp: fired.append("batch"),
         on_file_done=lambda r: fired.append("file"),
     )
     worker = TranscriptionWorker(
