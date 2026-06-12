@@ -8,6 +8,11 @@ import argparse
 import subprocess
 import sys
 import time
+from pathlib import Path
+
+# Running as `python scripts/benchmark.py` puts scripts/ first on sys.path;
+# the engine module lives in the repo root.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
 def _media_duration(path: str) -> float | None:

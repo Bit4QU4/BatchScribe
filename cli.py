@@ -64,6 +64,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Enable stricter VAD parameters to reduce hallucinations.",
     )
+    parser.add_argument(
+        "--batched",
+        action="store_true",
+        help="Batched GPU inference (~2.5x faster on CUDA; ignored on CPU).",
+    )
     parser.add_argument("--version", action="version", version=f"batchscribe {_version()}")
 
     args = parser.parse_args(argv)
@@ -92,6 +97,7 @@ def main(argv: list[str] | None = None) -> int:
             language=language,
             initial_prompt=args.prompt,
             strict_vad=args.strict_vad,
+            batched=args.batched,
         )
         backend.load()
     except KeyboardInterrupt:

@@ -288,3 +288,35 @@ def test_config_valid_new_fields_applied(tmp_path: Path):
     cfg = _load_with(tmp_path, raw)
     assert cfg.initial_prompt == "CEO John"
     assert cfg.strict_vad is True
+
+
+def test_create_backend_threads_batched():
+    b = engine.create_backend(model_size="tiny", device="cpu", batched=True)
+    assert isinstance(b, engine.FasterWhisperBackend)
+    assert b._batched is True
+
+
+def test_batched_on_cpu_does_not_build_pipeline(monkeypatch):
+    """CPU resolution must leave the pipeline unset even when batched=True."""
+    class _StubModel:
+        def __init__(self, *a, **k):
+            pass
+
+    import faster_whisper
+    monkeypatch.setattr(faster_whisper, "WhisperModel", _StubModel)
+    b = engine.FasterWhisperBackend(model_size="tiny", device="cpu", batched=True)
+    b.load()
+    assert b._pipeline is None
+
+
+def test_config_roundtrip_batched_gpu(tmp_path, monkeypatch):
+    monkeypatch.setattr(cfg_mod, "config_dir", lambda: tmp_path)
+    c = cfg_mod.AppConfig(batched_gpu=True)
+    cfg_mod.save_config(c)
+    assert cfg_mod.load_config().batched_gpu is True
+
+
+def test_config_wrong_type_batched_gpu_falls_back(tmp_path, monkeypatch):
+    monkeypatch.setattr(cfg_mod, "config_dir", lambda: tmp_path)
+    (tmp_path / "config.json").write_text('{"batched_gpu": "yes"}', encoding="utf-8")
+    assert cfg_mod.load_config().batched_gpu is False
