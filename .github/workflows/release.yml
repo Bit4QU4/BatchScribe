@@ -22,16 +22,17 @@ jobs:
           cache: pip
 
       # Install the exact locked dependency set, not a fresh resolution.
+      # The export carries hashes, which puts pip in --require-hashes mode,
+      # so the unhashed build tools go in a separate invocation.
       - name: Install dependencies from lockfile
         run: |
           pip install uv
           uv export --frozen --no-dev --no-emit-project --output-file requirements-ci.txt
-          pip install -r requirements-ci.txt pyinstaller
+          pip install -r requirements-ci.txt
+          pip install pyinstaller==6.20.0 pytest
 
       - name: Run tests
-        run: |
-          pip install pytest
-          python -m pytest tests/ -q
+        run: python -m pytest tests/ -q
 
       - name: Build one-dir bundle
         run: pyinstaller main.spec --noconfirm
