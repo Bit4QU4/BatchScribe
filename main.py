@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog
@@ -12,7 +13,13 @@ from ttkbootstrap.constants import DISABLED, END, HORIZONTAL, LEFT, NORMAL, RIGH
 from ttkbootstrap.widgets import ToolTip
 
 from config import AppConfig, load_config, save_config, setup_logging
-from engine import LANGUAGE_CHOICES, MODEL_SIZES, TranscriptionBackend, create_backend
+from engine import (
+    LANGUAGE_CHOICES,
+    MODEL_SIZES,
+    TranscriptionBackend,
+    create_backend,
+    model_is_cached,
+)
 from worker import (
     FileResult,
     TranscriptionJob,
@@ -62,6 +69,29 @@ def build_jobs(
     ]
 
 
+def batch_progress_text(
+    started: int,
+    total: int,
+    elapsed: float,
+    completed_wall_times: list[float],
+) -> str:
+    """Return the status bar string for a running batch.
+
+    ETA is omitted until at least one file completes, because we have no
+    per-file duration for unstarted files — we use mean wall time instead.
+    """
+    elapsed_str = format_elapsed(elapsed)
+    file_part = f"File {started} of {total}"
+    if not completed_wall_times:
+        return f"{file_part} - {elapsed_str} elapsed"
+    remaining = total - len(completed_wall_times)
+    if remaining <= 0:
+        return f"{file_part} - {elapsed_str} elapsed"
+    mean_wall = sum(completed_wall_times) / len(completed_wall_times)
+    eta = format_elapsed(mean_wall * remaining)
+    return f"{file_part} - {elapsed_str} elapsed, ~{eta} remaining"
+
+
 # ---------------------------------------------------------------------------
 # Main application class
 # ---------------------------------------------------------------------------
@@ -95,6 +125,14 @@ class TranscriberApp:
         self._worker: TranscriptionWorker | None = None
 
         self._running = False
+
+        # Batch-level progress counters; reset in _start_transcribe.
+        self._batch_total: int = 0
+        self._batch_started: int = 0
+        self._batch_start_time: float = 0.0
+        self._batch_file_wall_times: list[float] = []
+        # Wall-clock when the current file's on_file_start fired (for ETA accumulation)
+        self._current_file_start_time: float = 0.0
 
         self._build_ui()
         self._app.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -188,7 +226,14 @@ class TranscriberApp:
                                 state="readonly", width=16)
         model_cb.grid(row=0, column=1, sticky="w", padx=4)
         model_cb.bind("<<ComboboxSelected>>", self._on_model_change)
-        ToolTip(model_cb, text="Larger models are more accurate but slower and use more VRAM.")
+        ToolTip(
+            model_cb,
+            text=(
+                "Larger models are more accurate but slower and use more VRAM.\n"
+                "tiny ~75MB, base ~145MB, small ~480MB, medium ~1.5GB, large ~3GB.\n"
+                "Larger = more accurate, slower."
+            ),
+        )
 
         ttk.Label(sf, text="Language:").grid(row=1, column=0, sticky="w", pady=(4, 0))
         self._lang_var = tk.StringVar(value=self._cfg.language)
@@ -422,6 +467,13 @@ class TranscriberApp:
         for p in self._file_paths:
             self._tree_set(p, status="Queued", progress="")
 
+        # Reset batch counters so a new run never inherits state from the previous one.
+        self._batch_total = len(jobs)
+        self._batch_started = 0
+        self._batch_start_time = time.monotonic()
+        self._batch_file_wall_times = []
+        self._current_file_start_time = 0.0
+
         self._progress["value"] = 0
         self._running = True
         self._set_running_state(running=True)
@@ -441,6 +493,16 @@ class TranscriberApp:
     def _on_file_start(self, path: str) -> None:
         self._tree_set(path, status="Running", progress="0%")
         self._progress["value"] = 0
+        self._batch_started += 1
+        self._current_file_start_time = time.monotonic()
+        elapsed = time.monotonic() - self._batch_start_time
+        txt = batch_progress_text(
+            self._batch_started,
+            self._batch_total,
+            elapsed,
+            self._batch_file_wall_times,
+        )
+        self._set_status(txt)
 
     def _on_segment_progress(self, path: str, fraction: float) -> None:
         pct = int(fraction * 100)
@@ -450,6 +512,11 @@ class TranscriberApp:
     def _on_file_done(self, result: FileResult) -> None:
         if result.ok:
             self._tree_set(result.path, status="Done", progress="100%")
+            # Track wall time of completed files to improve ETA for remaining ones.
+            if self._current_file_start_time > 0:
+                self._batch_file_wall_times.append(
+                    time.monotonic() - self._current_file_start_time
+                )
         elif "Cancelled" in result.message:
             self._tree_set(result.path, status="Cancelled", progress="")
         else:
@@ -516,6 +583,26 @@ class TranscriberApp:
                 self._tree.set(iid, col, val)
 
     def _set_status(self, text: str, danger: bool = False) -> None:
+        # The worker fires "Loading model..." without knowing whether the model
+        # needs downloading; only the GUI knows about cache semantics, so we
+        # substitute the download message here rather than coupling engine.py
+        # imports into worker.py.
+        if text == "Loading model...":
+            model = self._model_var.get()
+            lang = language_to_param(self._lang_var.get())
+            if not model_is_cached(model, lang):
+                size_hint = {
+                    "tiny": "~75 MB",
+                    "base": "~145 MB",
+                    "small": "~480 MB",
+                    "medium": "~1.5 GB",
+                    "large-v2": "~3 GB",
+                    "large-v3": "~3 GB",
+                    "distil-large-v3": "~1.5 GB",
+                }.get(model, "hundreds of MB - GB")
+                text = (
+                    f"Downloading {model} model (first use; {size_hint})..."
+                )
         self._status_var.set(text)
         style = "danger" if danger else "secondary"
         self._status_label.configure(bootstyle=style)

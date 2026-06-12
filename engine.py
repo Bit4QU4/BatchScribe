@@ -32,6 +32,44 @@ _EN_VARIANT_SIZES: frozenset[str] = frozenset({"tiny", "base", "small", "medium"
 LANGUAGE_CHOICES: tuple[str, ...] = ("en", "auto", "es", "fr", "de", "zh", "ja", "pt", "ru")
 
 
+def _effective_model_name(model_size: str, language: str | None) -> str:
+    """Return the HuggingFace model name for the given size and language.
+
+    English-only variants exist for a subset of sizes; use them when the
+    language is pinned to English so the user gets the leaner dedicated model.
+    """
+    if language == "en" and model_size in _EN_VARIANT_SIZES:
+        return f"{model_size}.en"
+    return model_size
+
+
+def model_is_cached(
+    model_size: str,
+    language: str | None,
+    models_dir: Path | None = None,
+) -> bool:
+    """Return True if the HF snapshot for this model already lives on disk.
+
+    HF layout: <models_dir>/models--Systran--<repo>/snapshots/<hash>/
+    Treated as cached when at least one non-empty snapshots subdirectory exists.
+    Pure pathlib — never imports faster_whisper.
+    """
+    effective = _effective_model_name(model_size, language)
+    # Distil sizes live under faster-distil-whisper-<rest>, not faster-whisper-.
+    if effective.startswith("distil-"):
+        repo = f"faster-distil-whisper-{effective.removeprefix('distil-')}"
+    else:
+        repo = f"faster-whisper-{effective}"
+    base = (models_dir or default_models_dir()) / f"models--Systran--{repo}"
+    snapshots = base / "snapshots"
+    if not snapshots.is_dir():
+        return False
+    return any(
+        d.is_dir() and any(d.iterdir())
+        for d in snapshots.iterdir()
+    )
+
+
 def default_models_dir() -> Path:
     """Return (and create) the platform-appropriate model cache directory."""
     localappdata = os.environ.get("LOCALAPPDATA")
@@ -165,9 +203,7 @@ class FasterWhisperBackend(TranscriptionBackend):
         return self._device_arg
 
     def _effective_model_name(self, language: str | None) -> str:
-        if language == "en" and self._model_size in _EN_VARIANT_SIZES:
-            return f"{self._model_size}.en"
-        return self._model_size
+        return _effective_model_name(self._model_size, language)
 
     # ------------------------------------------------------------------
     # TranscriptionBackend interface
