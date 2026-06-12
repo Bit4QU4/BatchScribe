@@ -451,11 +451,15 @@ def test_batch_summary_two_ok_one_failed(tmp_path: Path):
     failed_lines = [ln for ln in data_lines if "\tFAILED\t" in ln]
     assert len(failed_lines) == 1
 
-    # RTF direction: duration / wall time. The stub transcribes 10s of audio in
-    # milliseconds, so the factor must be far above 1x (the inverse would be ~0).
+    # RTF direction: duration / wall time. The stub transcribes 10s of audio
+    # near-instantly, so any parseable factor must be far above 1x (the
+    # inverse would be ~0). Wall time can round to exactly 0.0 on fast
+    # runners, which legitimately yields "n/a" — direction is then covered
+    # deterministically by test_batch_summary_rtf_direction.
     for ln in ok_lines:
-        rtf_value = float(ln.rsplit("rtf=", 1)[1].rstrip("x"))
-        assert rtf_value > 1.0
+        raw = ln.rsplit("rtf=", 1)[1]
+        if raw != "n/a":
+            assert float(raw.rstrip("x")) > 1.0
 
 
 def test_batch_summary_cancelled_line(tmp_path: Path):
@@ -618,3 +622,23 @@ if __name__ == "__main__":
 
     print(f"\n{passed} passed, {failed} failed")
     sys.exit(0 if failed == 0 else 1)
+
+
+def test_batch_summary_rtf_direction(tmp_path: Path):
+    """rtf = audio duration / wall time: 10s of audio in 5s wall = 2.00x."""
+    worker = TranscriptionWorker(
+        backend=_StubBackend(FAKE_SEGMENTS),
+        dispatch=lambda fn: fn(),
+        callbacks=WorkerCallbacks(),
+    )
+    src = tmp_path / "clip.mp3"
+    src.write_bytes(b"\x00")
+    results = [
+        FileResult(path=str(src), ok=True, message="OK", elapsed=5.0, duration=10.0),
+    ]
+    job = TranscriptionJob(path=str(src), formats=["txt"], output_dir=str(tmp_path), language="en")
+    path = worker._write_batch_summary(results, 1, 0, 5.0, job)
+    worker.shutdown()
+    assert path is not None
+    text = Path(path).read_text(encoding="utf-8")
+    assert "rtf=2.00x" in text
