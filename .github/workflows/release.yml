@@ -47,7 +47,7 @@ jobs:
           "ZIP_NAME=BatchScribe-$version-windows-x64.zip" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: ${{ env.ZIP_NAME }}
 
