@@ -5,7 +5,7 @@ description = "Python desktop app for transcription with faster-whisper and tkin
 requires-python = ">=3.10"
 dependencies = [
     "faster-whisper==1.2.1",
-    "ttkbootstrap==1.20.4",
+    "ttkbootstrap==2.1.1",
     "tkinterdnd2==0.5.0",
 ]
 
